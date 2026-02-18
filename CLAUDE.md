@@ -1,6 +1,6 @@
 # Zenlytic ZoE Data Model - Complete Knowledge Base
 
-**Version:** 1.2 | **Last Updated:** 2025-02-13
+**Version:** 1.3 | **Last Updated:** 2025-02-17
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how ZoE (the AI analyst) uses the semantic layer.
 
@@ -1049,6 +1049,7 @@ These are real-world patterns discovered during customer workspace work. Apply t
 - **SQL syntax errors** (date functions, type casting, dialect-specific functions) are ZoE's SQL generation responsibility, not a data model problem.
 - **Don't add SQL dialect guidance** to `zoe_description`, view `description`, or system prompts — it clutters the semantic layer with implementation details that ZoE should already know.
 - **Fix at the root:** If ZoE consistently generates bad SQL for a specific warehouse, that's a ZoE platform issue to report, not a data model issue to work around.
+- **Exception — Column selection vs syntax:** The above applies to SQL *syntax* (date functions, CAST, etc.). However, if ZoE persistently selects a raw internal column (e.g., Druid's `__time`) instead of a properly defined dimension group, that's a *column navigation* problem, not a dialect problem. System prompt guidance to steer ZoE toward the correct field is appropriate in this case. Be explicit and forceful — generic guidance like "don't use raw columns" is often insufficient. Name the specific column to avoid and the specific dimension group to use instead.
 
 ### Identifier Cleanup Workflow
 Reusable pattern for auditing any customer's identifiers:
@@ -1124,6 +1125,58 @@ When investigating a new customer's data model, follow this sequence:
 - **Don't assume field names match business concepts.** A field called `channel` may not contain what business users call "channels." Always verify with `SELECT DISTINCT`.
 - **Document field-to-concept mappings** in `zoe_description` when the field name doesn't match the business term (e.g., `source_organization_uri` is actually the aggregator platform name like 'ubereats.com').
 
+### Derived Table Alias Mismatches
+- **Aliases in derived table SQL must exactly match the column names referenced by dimensions.** When a derived table uses functions like `LATEST_BY`, `FIRST_VALUE`, or similar, the output alias can silently differ from the original column name. A dimension referencing `${TABLE}."full.column.name"` will fail at query time if the derived table aliased it as `"shortened.name"`.
+- **This is a silent, latent bug.** YAML validation doesn't catch it because it doesn't execute the SQL. The error only surfaces when ZoE generates a query that touches the mismatched dimension.
+- **Audit pattern:** For every derived table, compare each alias in the SELECT clause against every `${TABLE}."column_name"` reference in the view's dimensions. Any mismatch = runtime "column not found" error.
+
+### Single-View Topics Are Redundant
+- **Topics that wrap a single view with no joins serve no purpose.** They don't add join context, they don't add access control that couldn't live on the view itself, and they increase the number of topics ZoE must evaluate for every query.
+- **Removing single-view topics reduces noise** and improves ZoE's topic selection accuracy.
+- **Before deleting:** Migrate any `description`/`zoe_description` from the topic to the view itself (using `description` since `zoe_description` isn't valid on views). Then delete the topic file.
+- **Test:** If a topic has only `base_view` and no additional views in the `views:` section, it's a candidate for removal.
+
+### View Selection Guide in System Prompt
+- **When a workspace has many views spanning different domains**, ZoE may scan all views before selecting one, causing slow or incorrect responses. Adding a **View Selection Guide** to the system prompt — mapping question domains to specific views — dramatically improves ZoE's initial view selection.
+- **Format:** A simple bulleted list mapping question types to view names (e.g., "Parking ticket questions → Use parking_tickets_v2"). Include geographic or model scope notes (e.g., "Druid, European parks only").
+- **This complements, not replaces, good `description` fields on views.** The system prompt guide gives ZoE a quick routing table before it reads individual view metadata.
+- **Include negative guidance:** Explicitly state which views should NOT be used for certain question types to prevent cross-domain confusion.
+
+### Row Limits for Detail Queries (Performance Guardrail)
+- **ZoE can generate unbounded detail queries** (SELECT with many columns, no aggregation) that return hundreds of thousands of rows, causing timeouts.
+- **Add a system prompt instruction to include `LIMIT 1001`** on detail/row-level queries. This doesn't prevent the query from running — it caps the result set so the query executes faster and returns.
+- **Post-hoc notification:** If exactly 1,001 rows return, ZoE should inform the user that results were capped and offer alternatives (add filters, aggregate instead, or increase the limit). Note: ZoE still *executes* the query — the limit is a performance guardrail, not a pre-flight check.
+- **For aggregated queries** (GROUP BY with SUM, COUNT, AVG), no limit is needed.
+- **Alternative approach (COUNT-first):** For warehouses where even a capped query is expensive, instruct ZoE to run `SELECT COUNT(*)` with the same FROM/WHERE first. If the count exceeds a threshold, ask the user before running the detail query. This adds a trivial aggregation query but avoids executing the expensive detail query entirely. On columnar stores like Druid, the COUNT is near-free.
+
+### Memories with Bad SQL Persist and Poison Future Queries
+- **Memories created from ZoE responses that contained incorrect SQL** (wrong column names, invalid functions, broken syntax) will be served back to ZoE on similar future questions, perpetuating the error.
+- **When fixing data model issues, always audit memories** (Settings → Memory) for entries created *before* the fix. Delete any that contain the old, broken patterns.
+- **Common poisoned memory patterns:** References to renamed columns (e.g., `__time` after renaming to a semantic date field), wrong SQL dialect functions (Snowflake functions used on Druid), invalid LOOKUP syntax, or columns that no longer exist after a derived table refactor.
+
+### Consolidating Duplicate Topic/View Variants
+- **Workspaces can accumulate near-identical copies** of topics and views (e.g., 5 `supplier_dashboard_locationA` topics and 5 `new_parkers_locationA` views, each for a different location).
+- **Consolidate into a single parameterized topic+view** where the user filters by a dimension (e.g., Operator ID, Location) rather than selecting a different topic.
+- **Why:** Duplicate topics confuse ZoE (which one to pick?), increase maintenance burden, and create inconsistency when changes need to propagate to all copies.
+- **Process:** Create the consolidated view with all locations' data, create one topic, then delete the per-location variants. Migrate any unique descriptions.
+
+### Case Sensitivity in Druid Column Quoting
+- **Druid column names are case-sensitive.** If a database column is `"MeterCode"` (PascalCase), the SQL reference must use quoted `"MeterCode"`, not `metercode` or `METERCODE`.
+- **Zenlytic auto-lowercases field `name` properties**, but the `sql:` expression must preserve the original casing with double quotes.
+- **A casing mismatch causes silent null returns or column-not-found errors** — not a validation-time error.
+- **Audit pattern:** For any Druid view, compare `sql:` expressions against actual database column names (run `SELECT * FROM table LIMIT 1` to verify). Ensure quoted column names match exactly.
+
+### System Prompt as ZoE's Operational Manual
+- **The system prompt is the most powerful tool for guiding ZoE's behavior** across an entire workspace. It applies to every query, every user, every session.
+- **Effective system prompt sections** (proven patterns):
+  - **Database Dialect:** Which connections use which SQL dialect, with explicit column avoidance rules
+  - **View Selection Guide:** Domain-to-view routing table (see above)
+  - **Row Limits:** Performance guardrails for detail queries (see above)
+  - **Embedded Environment Rules:** Context that ZoE should infer automatically (e.g., "the park" = user's pre-selected park)
+  - **Time Period Rules:** How to interpret relative date phrases ("last month," "last week") anchored to a specific reference date
+  - **User Attribute Handling:** Instructions to use automatically-provided attributes (language, timezone) without asking the user
+- **Don't put field-level guidance in the system prompt** — use `zoe_description` on the field instead. The system prompt is for workspace-wide rules, not individual field documentation.
+
 ---
 
 ## Documentation Sources
@@ -1157,6 +1210,7 @@ When investigating a new customer's data model, follow this sequence:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3 | 2025-02-17 | Added 8 new Part 15 lessons from Flowbird engagement: derived table alias mismatches, single-view topic removal, View Selection Guide pattern, row limits guardrail, poisoned memories, duplicate topic consolidation, Druid case sensitivity, system prompt as operational manual. Added __time nuance to SQL dialect lesson. |
 | 1.2 | 2025-02-13 | Added Part 15 lessons: redundant identifiers as latent risks, don't band-aid SQL dialect issues, identifier cleanup workflow. |
 | 1.1 | 2025-02-13 | Reframed Part 7 for exploratory-only ZoE (Clarity mode deprecated). Removed two-column comparison table, "both modes" language, renamed sections. |
 | 1.0 | 2025-02-12 | Initial complete KB — Parts 1-15. Includes CTO corrections on join cardinality nuance, relationships as preferred join location, and Context Manager note. |
