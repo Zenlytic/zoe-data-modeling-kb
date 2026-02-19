@@ -1,14 +1,14 @@
-# ZoE Data Modeling Knowledge Base
+# Zoë Data Modeling Knowledge Base
 
-A comprehensive knowledge base for working with **Zenlytic's semantic layer** and **ZoE**, Zenlytic's AI data analyst. This document serves as the authoritative reference for building, maintaining, and troubleshooting data models across Zenlytic customer workspaces.
+A comprehensive knowledge base for working with **Zenlytic's semantic layer** and **Zoë**, Zenlytic's AI data analyst. This document serves as the authoritative reference for building, maintaining, and troubleshooting data models across Zenlytic customer workspaces.
 
 ## What This Is
 
 `CLAUDE.md` contains the complete knowledge base covering:
 
 - **YAML schema** for views, dimensions, measures, dimension groups, topics, and models
-- **Join architecture** — identifiers, topics, relationships, and how ZoE interprets them
-- **ZoE AI context** — how ZoE ingests descriptions, zoe_descriptions, synonyms, searchable fields, memories, and system prompts to generate SQL
+- **Join architecture** — identifiers, topics, relationships, and how Zoë interprets them
+- **Zoë AI context** — how Zoë ingests descriptions, zoe_descriptions, synonyms, searchable fields, memories, and system prompts to generate SQL
 - **Git operations** for managing Zenlytic customer repositories
 - **Permissions and access controls** — user roles, attributes, row-level and column-level security
 - **Practical lessons** — real-world patterns, pitfalls, and workflows discovered across customer engagements
@@ -40,7 +40,7 @@ Once loaded, your AI assistant will understand:
 
 - How to read and write Zenlytic YAML files (views, topics, models)
 - The correct schema for dimensions, measures, dimension groups, and identifiers
-- How ZoE generates SQL and what context sources influence its behavior
+- How Zoë generates SQL and what context sources influence its behavior
 - Join best practices and common pitfalls (fan-out, redundant identifiers, chained joins)
 - When to use `description` vs `zoe_description` vs system prompts vs memories
 - Data discovery workflows for investigating new customer workspaces

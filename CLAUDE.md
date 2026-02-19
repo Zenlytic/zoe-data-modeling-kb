@@ -1,8 +1,8 @@
-# Zenlytic ZoE Data Model - Complete Knowledge Base
+# Zenlytic Zoë Data Model - Complete Knowledge Base
 
 **Version:** 1.4 | **Last Updated:** 2025-02-18
 
-Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how ZoE (the AI analyst) uses the semantic layer.
+Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
 > **Version Note:** This KB is versioned. Check the changelog at the bottom for what changed between versions. When making updates, increment the version (minor changes: 1.1 → 1.2, major restructures: 1.x → 2.0) and add a changelog entry.
 
@@ -161,7 +161,7 @@ fields:                                   # Dimensions and measures
 - When using `derived_table`, the SQL statement becomes the data foundation, and `always_filter` does not apply
 - `always_filter` can join external fields by specifying the view name (e.g., `customers.is_churned`)
 - Views support a `sets` property: lists of grouped fields
-- **`zoe_description` is NOT valid at the view level** — use `description` instead (which is sent to both the UI and ZoE). `zoe_description` is valid on: dimensions, measures, dimension groups, and topics.
+- **`zoe_description` is NOT valid at the view level** — use `description` instead (which is sent to both the UI and Zoë). `zoe_description` is valid on: dimensions, measures, dimension groups, and topics.
 
 ---
 
@@ -492,13 +492,13 @@ views:
 
 ---
 
-## Part 7: How ZoE Uses the Semantic Layer
+## Part 7: How Zoë Uses the Semantic Layer
 
-ZoE (Zenlytic's AI analyst) writes SQL to answer user questions, using the semantic layer as context to understand the data model.
+Zoë (Zenlytic's AI analyst) writes SQL to answer user questions, using the semantic layer as context to understand the data model.
 
-### How ZoE Works
+### How Zoë Works
 
-| Aspect | How ZoE Operates |
+| Aspect | How Zoë Operates |
 |--------|-----------------|
 | **Process** | User prompt → LLM → SQL query → Results |
 | **SQL Generation** | Non-deterministic — the same prompt may yield different SQL each run |
@@ -506,32 +506,32 @@ ZoE (Zenlytic's AI analyst) writes SQL to answer user questions, using the seman
 | **Join Logic** | LLM interprets topic definitions, relationships, and identifiers to construct joins |
 | **Permissions** | Row and column-based access controls are enforced by the system (see Permissions section below) |
 
-> **Note (Legacy):** An older mode called "Clarity" used deterministic SQL compilation from a query JSON intermediate step. This mode is being phased out. All guidance in this document is written for ZoE's current SQL-generation behavior.
+> **Note (Legacy):** An older mode called "Clarity" used deterministic SQL compilation from a query JSON intermediate step. This mode is being phased out. All guidance in this document is written for Zoë's current SQL-generation behavior.
 
-### How ZoE Sees Join Information
+### How Zoë Sees Join Information
 
-**Topics**: ZoE sees topics and their associated joins. She uses topic join definitions to inform the SQL she writes.
+**Topics**: Zoë sees topics and their associated joins. She uses topic join definitions to inform the SQL she writes.
 
-**Warning**: A potential issue can arise if the topic implies illogical or counter-intuitive joins. For example, if a topic says it's valid to make many-to-many joins between large fact tables, ZoE may be misled into thinking it's a safe join when it will actually cause a fan-out.
+**Warning**: A potential issue can arise if the topic implies illogical or counter-intuitive joins. For example, if a topic says it's valid to make many-to-many joins between large fact tables, Zoë may be misled into thinking it's a safe join when it will actually cause a fan-out.
 
-**Best Practice**: Any `one_to_many` or `many_to_many` join in a topic *can* potentially degrade performance — but it won't necessarily if the join makes logical sense to ZoE. For example, a one-to-many from `orders` to `discounts` is intuitive and unlikely to cause issues, while a one-to-many between obscure tables with non-obvious names (e.g., `brv_si_deal_xt` to `brv_si_entity_xt`) will confuse ZoE because it can't reason well about the actual concepts. The key factor is whether ZoE can understand what the join represents, not just the cardinality.
+**Best Practice**: Any `one_to_many` or `many_to_many` join in a topic *can* potentially degrade performance — but it won't necessarily if the join makes logical sense to Zoë. For example, a one-to-many from `orders` to `discounts` is intuitive and unlikely to cause issues, while a one-to-many between obscure tables with non-obvious names (e.g., `brv_si_deal_xt` to `brv_si_entity_xt`) will confuse Zoë because it can't reason well about the actual concepts. The key factor is whether Zoë can understand what the join represents, not just the cardinality.
 
-**Identifiers**: ZoE sees identifiers (primary keys, foreign keys, and join-type identifiers). Identifiers provide join context alongside topics and model-level relationships.
+**Identifiers**: Zoë sees identifiers (primary keys, foreign keys, and join-type identifiers). Identifiers provide join context alongside topics and model-level relationships.
 
-**Relationships**: The `relationships` property on the model is how the Context Manager in Self-Service stores joins. This is a single YAML property that stores all relationships between tables. **ZoE sees all of these.** Along with identifiers and topics, relationships provide another way to define join logic for ZoE.
+**Relationships**: The `relationships` property on the model is how the Context Manager in Self-Service stores joins. This is a single YAML property that stores all relationships between tables. **Zoë sees all of these.** Along with identifiers and topics, relationships provide another way to define join logic for Zoë.
 
-**Where to Store Joins (Recommended)**: Non-obvious joins should be stored using **relationships** — this is the preferred location for structured join logic. Obvious joins (e.g., matching foreign key names between tables) don't need to be stored anywhere. In addition to relationships, add plain-text context in view-level `description` fields to explain valid or invalid join paths when ZoE makes mistakes in certain scenarios but not others.
+**Where to Store Joins (Recommended)**: Non-obvious joins should be stored using **relationships** — this is the preferred location for structured join logic. Obvious joins (e.g., matching foreign key names between tables) don't need to be stored anywhere. In addition to relationships, add plain-text context in view-level `description` fields to explain valid or invalid join paths when Zoë makes mistakes in certain scenarios but not others.
 
 **Coming Soon — Context Manager**: The Context Manager will unify all join management under the `relationships` concept, making the current multi-location approach (identifiers, topics, relationships) simpler. Once fully rolled out, all joins will be managed through relationships, eliminating the need to decide where to put join context.
 
-### ZoE Permissions
+### Zoë Permissions
 
-ZoE writes raw SQL, but **access controls are enforced by the system** — row-level permissions (`access_filters`) and column-level permissions are applied regardless of the query ZoE generates.
+Zoë writes raw SQL, but **access controls are enforced by the system** — row-level permissions (`access_filters`) and column-level permissions are applied regardless of the query Zoë generates.
 
 **For Admin Users:**
 - By default, admins can query any table the SQL role has access to (same as using the SQL editor)
 - There is a toggle to **"Enforce permissions for admins"** — when enabled, admins get the same restrictions as Explore-level users
-- With the toggle OFF, ZoE can try to query tables even if she doesn't know about them (if the role has access)
+- With the toggle OFF, Zoë can try to query tables even if she doesn't know about them (if the role has access)
 
 **For Explore-Level Users:**
 - Permissions from the semantic layer are enforced:
@@ -540,20 +540,20 @@ ZoE writes raw SQL, but **access controls are enforced by the system** — row-l
   - Column-based access control
   - Table access restrictions
 
-**Important**: While access controls are enforced by the system, ZoE (the LLM) is responsible for constructing valid queries — field existence, join validity, correct SQL syntax, etc. Descriptions, topic `zoe_description`, and system prompts are the primary tools for guiding ZoE toward correct queries.
+**Important**: While access controls are enforced by the system, Zoë (the LLM) is responsible for constructing valid queries — field existence, join validity, correct SQL syntax, etc. Descriptions, topic `zoe_description`, and system prompts are the primary tools for guiding Zoë toward correct queries.
 
 ### The Importance of Prompts for Join Context
 
-**Critical Insight**: Just as important (or more important) than structured join definitions are the **prompts on the view or system level** that explain to ZoE:
+**Critical Insight**: Just as important (or more important) than structured join definitions are the **prompts on the view or system level** that explain to Zoë:
 - Concepts around the joins
 - Potential fan traps
 - Other scenarios that could cause problems
 
 Use `description` at the view level and `zoe_description` at the field level and topic level to provide this guidance. Note: `zoe_description` is NOT a valid view-level property — only `description` is valid on views.
 
-### What ZoE Ingests
+### What Zoë Ingests
 
-**Context Sources (ZoE sees all of these and weighs them based on relevance):**
+**Context Sources (Zoë sees all of these and weighs them based on relevance):**
 - **Custom System Prompt** — Domain-specific knowledge, business rules, terminology, calculation methodologies
 - **Topics** — Join structure, relationships, and topic-level `description`/`zoe_description`
 - **Views, Dimensions, Measures** — Field definitions, types, `description`, and `zoe_description` (latter takes precedence)
@@ -562,28 +562,28 @@ Use `description` at the view level and `zoe_description` at the field level and
 - **Relationships** — Model-level relationship definitions
 - **Synonyms** — Alternative names for natural language queries
 - **Searchable Fields** — Indexed categorical values for NLP discovery (see Part 14)
-- **Access Controls** — ZoE cannot see or reference data that users don't have permission to view
+- **Access Controls** — Zoë cannot see or reference data that users don't have permission to view
 
-### How ZoE Weighs Context Sources
+### How Zoë Weighs Context Sources
 
-ZoE sees all context sources simultaneously and uses them based on relevance to the query. There is no strict hierarchy — the model weighs each source as it sees fit depending on the question being asked. That said, each source type has a natural role:
+Zoë sees all context sources simultaneously and uses them based on relevance to the query. There is no strict hierarchy — the model weighs each source as it sees fit depending on the question being asked. That said, each source type has a natural role:
 
 | Context Source | Role |
 |--------------|--------|
 | **Custom System Prompt** | Organization-wide rules, terminology, calculation logic |
 | **Structural Relationships** | Topics, joins, identifiers, topic descriptions |
-| **Field & View Descriptions** | `zoe_description` (if set) overrides `description` for ZoE |
+| **Field & View Descriptions** | `zoe_description` (if set) overrides `description` for Zoë |
 | **Memories** | Reinforced response patterns from previous queries |
 
 ### When to Use Each Context Type
 
 | Context Type | Best For | Use When |
 |---|---|---|
-| **Custom System Prompt** | Company terminology, business rules, calculation methodologies | Need organization-wide consistency across all ZoE interactions |
+| **Custom System Prompt** | Company terminology, business rules, calculation methodologies | Need organization-wide consistency across all Zoë interactions |
 | **`zoe_description`** (field/topic level) | AI-specific guidance that differs from user-facing copy | Standard `description` is too technical or misleading for the AI |
-| **`description`** (view/field/topic level) | Business context explaining how data should be used | Applies to both users in the UI and ZoE |
-| **Memory** | Reinforcing desired response patterns for specific questions | User confirms ZoE's answer is correct and wants it repeated |
-| **Topic Structure** | Understanding data connections and analytical context | Need ZoE to understand which fields relate to each domain |
+| **`description`** (view/field/topic level) | Business context explaining how data should be used | Applies to both users in the UI and Zoë |
+| **Memory** | Reinforcing desired response patterns for specific questions | User confirms Zoë's answer is correct and wants it repeated |
+| **Topic Structure** | Understanding data connections and analytical context | Need Zoë to understand which fields relate to each domain |
 
 **Key Guidance:**
 - Write **rich descriptions** with business context, not just technical definitions (e.g., "Total revenue expected from a customer over their entire relationship" vs bare field name)
@@ -591,59 +591,59 @@ ZoE sees all context sources simultaneously and uses them based on relevance to 
 - **Document edge cases** — note data quality issues, calculation nuances, and special handling in descriptions
 - **Review memories regularly** in Settings → Memory to remove undesired or outdated patterns
 
-### ZoE-Specific Properties
+### Zoë-Specific Properties
 
 | Property | Valid On | Purpose |
 |----------|----------|---------|
-| `zoe_description` | dimensions, measures, dimension_groups, topics | AI-specific context (overrides `description` for ZoE). **NOT valid on views.** |
-| `description` | views, dimensions, measures, dimension_groups, topics | Shown in UI and sent to ZoE. On views, this is the only way to provide ZoE context. |
+| `zoe_description` | dimensions, measures, dimension_groups, topics | AI-specific context (overrides `description` for Zoë). **NOT valid on views.** |
+| `description` | views, dimensions, measures, dimension_groups, topics | Shown in UI and sent to Zoë. On views, this is the only way to provide Zoë context. |
 | `synonyms` | dimensions, measures, dimension_groups | Alternative names for NLP matching |
 | `searchable: true` | dimensions | Index field categories for search |
-| `hidden: true` | views, dimensions, measures, dimension_groups, topics | Exclude from ZoE's available fields |
+| `hidden: true` | views, dimensions, measures, dimension_groups, topics | Exclude from Zoë's available fields |
 | `tags` | dimensions, measures | Special identifiers for semantic meaning |
 
 ### Guiding Principle for Data Model Quality
 
 > **"Could a talented data analyst answer questions using this data model on their first day?"**
 
-This is the foundational test for every data model. If the naming, descriptions, and structure would confuse a skilled analyst who is new to the domain, ZoE will also struggle. Apply this lens when naming fields, writing descriptions, and organizing topics.
+This is the foundational test for every data model. If the naming, descriptions, and structure would confuse a skilled analyst who is new to the domain, Zoë will also struggle. Apply this lens when naming fields, writing descriptions, and organizing topics.
 
-### Best Practices for ZoE
+### Best Practices for Zoë
 
 1. **Use `zoe_description`** on fields (dimensions, measures, dimension groups) and topics for AI-specific context that differs from user-facing descriptions. **Do NOT use `zoe_description` on views** — use `description` instead.
-2. **Use `description`** on views to provide join guidance and context to ZoE (view `description` is sent to both the UI and ZoE)
+2. **Use `description`** on views to provide join guidance and context to Zoë (view `description` is sent to both the UI and Zoë)
 3. **Add synonyms** for fields with multiple common names
 4. **Set `searchable: true`** on categorical dimensions users will filter on (see Part 14 for indexing limits and `allow_higher_searchable_max`)
 5. **Write clear topic descriptions** explaining analytical purpose (both `description` and `zoe_description` are valid on topics)
-6. **Use meaningful, distinguishing field names** — ZoE needs to tell similar fields apart. Use "Gross Revenue" and "Net Revenue" instead of "Revenue 1" and "Revenue 2". Name fields the way a data analyst would describe them to a colleague.
+6. **Use meaningful, distinguishing field names** — Zoë needs to tell similar fields apart. Use "Gross Revenue" and "Net Revenue" instead of "Revenue 1" and "Revenue 2". Name fields the way a data analyst would describe them to a colleague.
 7. **Hide technical fields** that shouldn't appear in queries
 8. **Document fan trap risks** in view-level `description` to warn about dangerous joins
-9. **Avoid many-to-many joins** in topics unless the join makes clear logical sense to ZoE (see "How ZoE Sees Join Information" above)
-10. **Store non-obvious joins in model-level `relationships`** (preferred) — obvious joins don't need to be stored anywhere. Supplement with plain-text context in view descriptions for edge cases. ZoE sees identifiers, topics, and relationships.
+9. **Avoid many-to-many joins** in topics unless the join makes clear logical sense to Zoë (see "How Zoë Sees Join Information" above)
+10. **Store non-obvious joins in model-level `relationships`** (preferred) — obvious joins don't need to be stored anywhere. Supplement with plain-text context in view descriptions for edge cases. Zoë sees identifiers, topics, and relationships.
 11. **Add system-level prompts** explaining join concepts and potential pitfalls
 12. **Set `default_date`** on every view with time-series measures, and use `canon_date` on measures that trend by a different date (see Part 13)
 13. **Configure entity drills** with `drill_fields` on primary key dimensions to enable contextual navigation (see Part 12)
-14. **Use ZoE Memories** for company-specific data interpretation patterns — create them from chat or the Memory Portal (see Part 9)
-15. **Maintain consistent database capitalization** in searchable fields — ZoE applies indexed values directly to filter conditions
+14. **Use Zoë Memories** for company-specific data interpretation patterns — create them from chat or the Memory Portal (see Part 9)
+15. **Maintain consistent database capitalization** in searchable fields — Zoë applies indexed values directly to filter conditions
 
-### ZoE AI Data Analyst Details
+### Zoë AI Data Analyst Details
 
 **Core Functionality:**
-- ZoE is an AI data analyst that interprets user questions and generates answers through data analysis
+- Zoë is an AI data analyst that interprets user questions and generates answers through data analysis
 - Operates on an "agentic architecture" that enables planning, tool usage, and memory development
 - Users can see exactly what steps she is taking, the reasoning behind her thinking, and the data she queries
 
 **Semantic Layer Integration:**
-- ZoE searches across the governed measures and dimensions to use existing fields and know when to create new ones
+- Zoë searches across the governed measures and dimensions to use existing fields and know when to create new ones
 - The system respects governance by preventing automatic modifications to the global cognitive layer
-- Dynamic Fields: ZoE can create user-specific measures and dimensions (for Develop+ roles when enabled), but cannot promote them to the global model — users must handle promotion manually through the UI
+- Dynamic Fields: Zoë can create user-specific measures and dimensions (for Develop+ roles when enabled), but cannot promote them to the global model — users must handle promotion manually through the UI
 
 **Configuration Options:**
 - Model Selection: Users switch between LLM models mid-conversation via dropdown
 - Input Methods: Voice transcription (`cmd + i` to toggle recording), file attachments (images, CSVs, PDFs — limit 5)
 - Integration: Slack (@Zenlytic tagging required) and Microsoft Teams support
 
-### Example ZoE-Optimized View with Join Warnings
+### Example Zoë-Optimized View with Join Warnings
 ```yaml
 version: 1
 type: view
@@ -772,16 +772,16 @@ fields:
 
 ---
 
-## Part 9: ZoE Memories
+## Part 9: Zoë Memories
 
-Memories allow users to train ZoE with company-specific knowledge, data preferences, and desired response patterns. ZoE automatically retrieves relevant memories when answering questions.
+Memories allow users to train Zoë with company-specific knowledge, data preferences, and desired response patterns. Zoë automatically retrieves relevant memories when answering questions.
 
 ### Creating Memories
 
-**From Chat:** Click "Add to memory" beneath a helpful ZoE response. ZoE will use this response pattern for similar future questions.
+**From Chat:** Click "Add to memory" beneath a helpful Zoë response. Zoë will use this response pattern for similar future questions.
 
 **From Memory Portal (Settings → Memory):**
-- **Text Memory**: Pair a user question with the desired ZoE response
+- **Text Memory**: Pair a user question with the desired Zoë response
 - **Explore Memory**: Configure questions with specific time ranges, metrics, filters, and slices, then preview before saving
 
 ### Managing Memories
@@ -790,9 +790,9 @@ Access via Settings → Memory to search, edit, or delete existing memories.
 ### Key Rules
 - Memories work for **data interpretation only**, not personality/behavioral changes
 - For tone or style adjustments, use custom system prompts instead
-- Memories are opt-in only — ZoE captures only explicitly saved content
-- ZoE does not learn from negative feedback or conversation history automatically
-- ZoE sees memories alongside all other context sources (system prompt, topics, descriptions) and weighs them based on relevance (see Part 7)
+- Memories are opt-in only — Zoë captures only explicitly saved content
+- Zoë does not learn from negative feedback or conversation history automatically
+- Zoë sees memories alongside all other context sources (system prompt, topics, descriptions) and weighs them based on relevance (see Part 7)
 
 ### When to Use Memories vs Other Context Types
 
@@ -804,7 +804,7 @@ Access via Settings → Memory to search, edit, or delete existing memories.
 | Reinforcing a correct answer pattern for a specific question type | **Memory** (best for fine-tuning specific responses) |
 | Join guidance or fan-trap warnings | **`description`** on the view + **`zoe_description`** on the topic |
 
-**Rule of thumb:** Use the system prompt for broad rules, descriptions/zoe_descriptions for field-level and join-level context, and memories for fine-tuning specific answer patterns after ZoE gets them right.
+**Rule of thumb:** Use the system prompt for broad rules, descriptions/zoe_descriptions for field-level and join-level context, and memories for fine-tuning specific answer patterns after Zoë gets them right.
 
 ---
 
@@ -816,7 +816,7 @@ The Data Model Editor enables teams to modify the Cognitive Layer (views, topics
 1. **Create a branch** — Zenlytic will not allow editing the production branch live
 2. **Edit YAML files** — Define metrics, joins, access controls directly in the browser
 3. **Real-time validation** — Errors and warnings display in a left-side panel with pinpointed locations
-4. **Deploy to production** — Click the green "Deploy to Production" button to merge and update ZoE
+4. **Deploy to production** — Click the green "Deploy to Production" button to merge and update Zoë
 
 ### Adding Tables
 1. Click the "+" button
@@ -825,7 +825,7 @@ The Data Model Editor enables teams to modify the Cognitive Layer (views, topics
 4. Click "Create View" — auto-generates boilerplate YAML
 
 ### Deployment Notes
-- After deploying, wait ~10 seconds for ZoE to ingest the updated semantic layer
+- After deploying, wait ~10 seconds for Zoë to ingest the updated semantic layer
 - Branch-based editing protects production stability
 - All changes go through the same YAML schema documented in this knowledge base
 
@@ -864,7 +864,7 @@ Zenlytic has 8 role types with 13 granular permissions:
 | **Admin** | All permissions — full workspace control |
 | **Develop** | All admin permissions except workspace settings |
 | **Develop without Deploy** | Cannot push data model changes to production |
-| **Explore** | Most common role — content, download, analytics, ZoE chat access |
+| **Explore** | Most common role — content, download, analytics, Zoë chat access |
 | **View** | Explore minus unlimited downloads |
 | **Restricted** | View content only — requires data access controls for proper security |
 | **Embed** | Specialized embedded user role |
@@ -874,7 +874,7 @@ Zenlytic has 8 role types with 13 granular permissions:
 **Permission Categories:**
 - **Content Management**: save, view, schedule dashboards
 - **Data Access**: download (with/without limits), run SQL, see underlying SQL
-- **Exploration**: explore from dashboards, chat with ZoE, create personal fields
+- **Exploration**: explore from dashboards, chat with Zoë, create personal fields
 - **Administration**: edit workspace settings, manage data model, deploy to production, change branches
 
 **Key permissions for data model work:**
@@ -915,7 +915,7 @@ Use the `drill_fields` property on a dimension:
 - Use meaningful entity `tags` to organize the data model
 - Include identifying information (IDs, names, contact details) as drill fields
 - Apply drills at the primary key level to maximize utility across queries
-- Drill fields enable ZoE to understand entity relationships and provide contextual navigation
+- Drill fields enable Zoë to understand entity relationships and provide contextual navigation
 
 ---
 
@@ -967,17 +967,17 @@ This requires a joinable relationship between the views.
 ### Key Rules
 - Both `default_date` and `canon_date` reference the `name` of a `dimension_group` field (type: time)
 - `canon_date` on a measure takes precedence over the view's `default_date`
-- If neither is set, ZoE may not know how to trend the metric over time
+- If neither is set, Zoë may not know how to trend the metric over time
 - Always set `default_date` on views that contain time-series measures
 
 ---
 
 ## Part 14: Data Indexing (searchable Fields)
 
-Data indexing controls which categorical values ZoE can discover and use for natural language filtering. Indexing is opt-in to protect privacy and prevent indexing sensitive data.
+Data indexing controls which categorical values Zoë can discover and use for natural language filtering. Indexing is opt-in to protect privacy and prevent indexing sensitive data.
 
 ### How It Works
-Setting `searchable: true` on a dimension allows ZoE to index the distinct values in that column (up to 10,000 categories by default). This enables queries like "show me orders where status is 'shipped'" — ZoE knows "shipped" is a valid value.
+Setting `searchable: true` on a dimension allows Zoë to index the distinct values in that column (up to 10,000 categories by default). This enables queries like "show me orders where status is 'shipped'" — Zoë knows "shipped" is a valid value.
 
 ### Configuration
 ```yaml
@@ -1003,9 +1003,9 @@ When a column exceeds 10,000 distinct values, indexing is skipped entirely. To i
 ### Best Practices
 - **Explicitly set `searchable: true`** on categorical dimensions users will filter on (status, category, region, channel, etc.)
 - **Don't set searchable on high-cardinality IDs** (order_id, customer_id) unless needed — they bloat the index
-- **Maintain consistent database capitalization** — ZoE applies indexed values directly to generated filters, so "Active" vs "active" matters
+- **Maintain consistent database capitalization** — Zoë applies indexed values directly to generated filters, so "Active" vs "active" matters
 - **Use `allow_higher_searchable_max`** sparingly and only when the business need requires it
-- **Don't index sensitive fields** (SSN, email, etc.) — indexing makes values discoverable through ZoE
+- **Don't index sensitive fields** (SSN, email, etc.) — indexing makes values discoverable through Zoë
 
 ---
 
@@ -1040,23 +1040,23 @@ These are real-world patterns discovered during customer workspace work. Apply t
 
 ### Redundant Identifiers as Latent Risks
 - **An identifier doesn't have to be actively wrong to be a problem.** Even if it points to a real column with the correct type, a foreign identifier is a latent risk if a topic `sql_on` already handles the same join more precisely.
-- **Identifiers remain auto-discoverable by ZoE** for queries outside the topic context or on edge cases. A redundant identifier gives ZoE a second, less-controlled join path that it might choose unpredictably.
+- **Identifiers remain auto-discoverable by Zoë** for queries outside the topic context or on edge cases. A redundant identifier gives Zoë a second, less-controlled join path that it might choose unpredictably.
 - **Rule: If a topic defines an explicit `sql_on` for a join, remove any overlapping foreign identifiers on the same view.** The topic join is more precise (multi-column, CAST-aware) and controlled. Keeping both creates ambiguity.
 - **Only keep identifiers that serve a purpose NOT covered by a topic** — e.g., simple single-key joins used across multiple topics, or primary keys that identify the view's grain.
 
 ### Don't Band-Aid SQL Dialect Issues in the Data Model
-- **ZoE knows the database warehouse** through the `connection` property on the model (e.g., `connection: my_connection` → Databricks). She has access to the connection config and knows what SQL dialect to use.
-- **SQL syntax errors** (date functions, type casting, dialect-specific functions) are ZoE's SQL generation responsibility, not a data model problem.
-- **Don't add SQL dialect guidance** to `zoe_description`, view `description`, or system prompts — it clutters the semantic layer with implementation details that ZoE should already know.
-- **Fix at the root:** If ZoE consistently generates bad SQL for a specific warehouse, that's a ZoE platform issue to report, not a data model issue to work around.
-- **Exception — Column selection vs syntax:** The above applies to SQL *syntax* (date functions, CAST, etc.). However, if ZoE persistently selects a raw internal column (e.g., Druid's `__time`) instead of a properly defined dimension group, that's a *column navigation* problem, not a dialect problem. System prompt guidance to steer ZoE toward the correct field is appropriate in this case. Be explicit and forceful — generic guidance like "don't use raw columns" is often insufficient. Name the specific column to avoid and the specific dimension group to use instead.
+- **Zoë knows the database warehouse** through the `connection` property on the model (e.g., `connection: my_connection` → Databricks). She has access to the connection config and knows what SQL dialect to use.
+- **SQL syntax errors** (date functions, type casting, dialect-specific functions) are Zoë's SQL generation responsibility, not a data model problem.
+- **Don't add SQL dialect guidance** to `zoe_description`, view `description`, or system prompts — it clutters the semantic layer with implementation details that Zoë should already know.
+- **Fix at the root:** If Zoë consistently generates bad SQL for a specific warehouse, that's a Zoë platform issue to report, not a data model issue to work around.
+- **Exception — Column selection vs syntax:** The above applies to SQL *syntax* (date functions, CAST, etc.). However, if Zoë persistently selects a raw internal column (e.g., Druid's `__time`) instead of a properly defined dimension group, that's a *column navigation* problem, not a dialect problem. System prompt guidance to steer Zoë toward the correct field is appropriate in this case. Be explicit and forceful — generic guidance like "don't use raw columns" is often insufficient. Name the specific column to avoid and the specific dimension group to use instead.
 
 ### Identifier Cleanup Workflow
 Reusable pattern for auditing any customer's identifiers:
 1. **Catalog all identifiers** — Read all view YAML files and list every identifier (name, type, sql expression)
 2. **Cross-reference against topics** — Flag any identifier whose join is also covered by a topic `sql_on`
-3. **Generate targeted ZoE test questions** — Write questions that exercise each join path (basic counts, cross-table lookups, chained joins, potential fan-out scenarios)
-4. **Run tests and inspect the SQL** — Check not just whether results are correct, but which join path ZoE chose (topic `sql_on` vs identifier auto-discovery)
+3. **Generate targeted Zoë test questions** — Write questions that exercise each join path (basic counts, cross-table lookups, chained joins, potential fan-out scenarios)
+4. **Run tests and inspect the SQL** — Check not just whether results are correct, but which join path Zoë chose (topic `sql_on` vs identifier auto-discovery)
 5. **Remove redundant identifiers** — Remove foreign identifiers where topic `sql_on` handles the same join
 6. **Re-test after removal** — Confirm no regressions; the topic join should still work identically
 
@@ -1108,9 +1108,9 @@ zoe_description: |
   - For date trending on [view], use [dimension_group_name].
 ```
 
-### ZoE SQL Generation Behavior
-- **ZoE discovers fields beyond the topic.** ZoE can follow foreign key chains to tables not explicitly in the topic. This is powerful but can lead to unexpected joins. Document risky join paths in the topic `zoe_description`.
-- **Memories remember the query, not the visualization.** A memory stores the query ZoE ran (including column aliases), so the SQL logic and labeling are preserved. However, memories do **not** capture the visualization type (bar chart, line chart, etc.) or any Python code used for advanced analysis. If a specific visualization or analysis method matters, it must be re-specified by the user or prescribed in the system prompt.
+### Zoë SQL Generation Behavior
+- **Zoë discovers fields beyond the topic.** Zoë can follow foreign key chains to tables not explicitly in the topic. This is powerful but can lead to unexpected joins. Document risky join paths in the topic `zoe_description`.
+- **Memories remember the query, not the visualization.** A memory stores the query Zoë ran (including column aliases), so the SQL logic and labeling are preserved. However, memories do **not** capture the visualization type (bar chart, line chart, etc.) or any Python code used for advanced analysis. If a specific visualization or analysis method matters, it must be re-specified by the user or prescribed in the system prompt.
 
 ### Data Discovery Workflow
 When investigating a new customer's data model, follow this sequence:
@@ -1127,37 +1127,37 @@ When investigating a new customer's data model, follow this sequence:
 
 ### Derived Table Alias Mismatches
 - **Aliases in derived table SQL must exactly match the column names referenced by dimensions.** When a derived table uses functions like `LATEST_BY`, `FIRST_VALUE`, or similar, the output alias can silently differ from the original column name. A dimension referencing `${TABLE}."full.column.name"` will fail at query time if the derived table aliased it as `"shortened.name"`.
-- **This is a silent, latent bug.** YAML validation doesn't catch it because it doesn't execute the SQL. The error only surfaces when ZoE generates a query that touches the mismatched dimension.
+- **This is a silent, latent bug.** YAML validation doesn't catch it because it doesn't execute the SQL. The error only surfaces when Zoë generates a query that touches the mismatched dimension.
 - **Audit pattern:** For every derived table, compare each alias in the SELECT clause against every `${TABLE}."column_name"` reference in the view's dimensions. Any mismatch = runtime "column not found" error.
 
 ### Single-View Topics Are Redundant
-- **Topics that wrap a single view with no joins serve no purpose.** They don't add join context, they don't add access control that couldn't live on the view itself, and they increase the number of topics ZoE must evaluate for every query.
-- **Removing single-view topics reduces noise** and improves ZoE's topic selection accuracy.
+- **Topics that wrap a single view with no joins serve no purpose.** They don't add join context, they don't add access control that couldn't live on the view itself, and they increase the number of topics Zoë must evaluate for every query.
+- **Removing single-view topics reduces noise** and improves Zoë's topic selection accuracy.
 - **Before deleting:** Migrate any `description`/`zoe_description` from the topic to the view itself (using `description` since `zoe_description` isn't valid on views). Then delete the topic file.
 - **Test:** If a topic has only `base_view` and no additional views in the `views:` section, it's a candidate for removal.
 
 ### View Selection Guide in System Prompt
-- **When a workspace has many views spanning different domains**, ZoE may scan all views before selecting one, causing slow or incorrect responses. Adding a **View Selection Guide** to the system prompt — mapping question domains to specific views — dramatically improves ZoE's initial view selection.
+- **When a workspace has many views spanning different domains**, Zoë may scan all views before selecting one, causing slow or incorrect responses. Adding a **View Selection Guide** to the system prompt — mapping question domains to specific views — dramatically improves Zoë's initial view selection.
 - **Format:** A simple bulleted list mapping question types to view names (e.g., "Parking ticket questions → Use parking_tickets_v2"). Include geographic or model scope notes (e.g., "Druid, European parks only").
-- **This complements, not replaces, good `description` fields on views.** The system prompt guide gives ZoE a quick routing table before it reads individual view metadata.
+- **This complements, not replaces, good `description` fields on views.** The system prompt guide gives Zoë a quick routing table before it reads individual view metadata.
 - **Include negative guidance:** Explicitly state which views should NOT be used for certain question types to prevent cross-domain confusion.
 
 ### Row Limits for Detail Queries (Performance Guardrail)
-- **ZoE can generate unbounded detail queries** (SELECT with many columns, no aggregation) that return hundreds of thousands of rows, causing timeouts.
+- **Zoë can generate unbounded detail queries** (SELECT with many columns, no aggregation) that return hundreds of thousands of rows, causing timeouts.
 - **Add a system prompt instruction to include `LIMIT 1001`** on detail/row-level queries. This doesn't prevent the query from running — it caps the result set so the query executes faster and returns.
-- **Post-hoc notification:** If exactly 1,001 rows return, ZoE should inform the user that results were capped and offer alternatives (add filters, aggregate instead, or increase the limit). Note: ZoE still *executes* the query — the limit is a performance guardrail, not a pre-flight check.
+- **Post-hoc notification:** If exactly 1,001 rows return, Zoë should inform the user that results were capped and offer alternatives (add filters, aggregate instead, or increase the limit). Note: Zoë still *executes* the query — the limit is a performance guardrail, not a pre-flight check.
 - **For aggregated queries** (GROUP BY with SUM, COUNT, AVG), no limit is needed.
-- **Alternative approach (COUNT-first):** For warehouses where even a capped query is expensive, instruct ZoE to run `SELECT COUNT(*)` with the same FROM/WHERE first. If the count exceeds a threshold, ask the user before running the detail query. This adds a trivial aggregation query but avoids executing the expensive detail query entirely. On columnar stores like Druid, the COUNT is near-free.
+- **Alternative approach (COUNT-first):** For warehouses where even a capped query is expensive, instruct Zoë to run `SELECT COUNT(*)` with the same FROM/WHERE first. If the count exceeds a threshold, ask the user before running the detail query. This adds a trivial aggregation query but avoids executing the expensive detail query entirely. On columnar stores like Druid, the COUNT is near-free.
 
 ### Memories with Bad SQL Persist and Poison Future Queries
-- **Memories created from ZoE responses that contained incorrect SQL** (wrong column names, invalid functions, broken syntax) will be served back to ZoE on similar future questions, perpetuating the error.
+- **Memories created from Zoë responses that contained incorrect SQL** (wrong column names, invalid functions, broken syntax) will be served back to Zoë on similar future questions, perpetuating the error.
 - **When fixing data model issues, always audit memories** (Settings → Memory) for entries created *before* the fix. Delete any that contain the old, broken patterns.
 - **Common poisoned memory patterns:** References to renamed columns (e.g., `__time` after renaming to a semantic date field), wrong SQL dialect functions (Snowflake functions used on Druid), invalid LOOKUP syntax, or columns that no longer exist after a derived table refactor.
 
 ### Consolidating Duplicate Topic/View Variants
 - **Workspaces can accumulate near-identical copies** of topics and views (e.g., 5 `supplier_dashboard_locationA` topics and 5 `new_parkers_locationA` views, each for a different location).
 - **Consolidate into a single parameterized topic+view** where the user filters by a dimension (e.g., Operator ID, Location) rather than selecting a different topic.
-- **Why:** Duplicate topics confuse ZoE (which one to pick?), increase maintenance burden, and create inconsistency when changes need to propagate to all copies.
+- **Why:** Duplicate topics confuse Zoë (which one to pick?), increase maintenance burden, and create inconsistency when changes need to propagate to all copies.
 - **Process:** Create the consolidated view with all locations' data, create one topic, then delete the per-location variants. Migrate any unique descriptions.
 
 ### Case Sensitivity in Druid Column Quoting
@@ -1166,23 +1166,23 @@ When investigating a new customer's data model, follow this sequence:
 - **A casing mismatch causes silent null returns or column-not-found errors** — not a validation-time error.
 - **Audit pattern:** For any Druid view, compare `sql:` expressions against actual database column names (run `SELECT * FROM table LIMIT 1` to verify). Ensure quoted column names match exactly.
 
-### System Prompt as ZoE's Operational Manual
-- **The system prompt is the most powerful tool for guiding ZoE's behavior** across an entire workspace. It applies to every query, every user, every session.
+### System Prompt as Zoë's Operational Manual
+- **The system prompt is the most powerful tool for guiding Zoë's behavior** across an entire workspace. It applies to every query, every user, every session.
 - **Effective system prompt sections** (proven patterns):
   - **Database Dialect:** Which connections use which SQL dialect, with explicit column avoidance rules
   - **View Selection Guide:** Domain-to-view routing table (see above)
   - **Row Limits:** Performance guardrails for detail queries (see above)
-  - **Embedded Environment Rules:** Context that ZoE should infer automatically (e.g., "the park" = user's pre-selected park)
+  - **Embedded Environment Rules:** Context that Zoë should infer automatically (e.g., "the park" = user's pre-selected park)
   - **Time Period Rules:** How to interpret relative date phrases ("last month," "last week") anchored to a specific reference date
   - **User Attribute Handling:** Instructions to use automatically-provided attributes (language, timezone) without asking the user
 - **Don't put field-level guidance in the system prompt** — use `zoe_description` on the field instead. The system prompt is for workspace-wide rules, not individual field documentation.
 
 ### Flag Non-Business-Friendly Field Values for Customer Clarification
-- **Dimensions may store cryptic, technical, or integration-level values** (system identifiers, API object names, internal codes) that won't match how business users phrase questions to ZoE. These mappings generally **cannot be inferred from the data alone**.
+- **Dimensions may store cryptic, technical, or integration-level values** (system identifiers, API object names, internal codes) that won't match how business users phrase questions to Zoë. These mappings generally **cannot be inferred from the data alone**.
 - **During data discovery, flag any dimension whose stored values use non-business-friendly naming** — abbreviations, system codes, integration object names, or internal identifiers that a business user wouldn't recognize or use in a question.
 - **Ask the customer what their users call those values.** Don't guess or invent mappings. The customer knows the business terminology; you don't.
-- **Once clarified, apply the standard discoverability pattern:** `searchable: true` on the dimension, `zoe_description` with the explicit stored-value-to-business-name mapping, and `synonyms` with the common business names. This ensures ZoE can translate natural language queries into correct filter values.
-- **Example:** A dimension stores `"network merchant gateway"` but users ask about `"NMI"`. Without the mapping, ZoE can't connect the two. After customer clarification, add `zoe_description` documenting `NMI = 'network merchant gateway'` and `synonyms: [NMI, payment processor]`.
+- **Once clarified, apply the standard discoverability pattern:** `searchable: true` on the dimension, `zoe_description` with the explicit stored-value-to-business-name mapping, and `synonyms` with the common business names. This ensures Zoë can translate natural language queries into correct filter values.
+- **Example:** A dimension stores `"network merchant gateway"` but users ask about `"NMI"`. Without the mapping, Zoë can't connect the two. After customer clarification, add `zoe_description` documenting `NMI = 'network merchant gateway'` and `synonyms: [NMI, payment processor]`.
 
 ---
 
@@ -1196,11 +1196,11 @@ When investigating a new customer's data model, follow this sequence:
 - [Zenlytic Docs - Dimension Groups](https://docs.zenlytic.com/data-modeling/dimension_group)
 - [Zenlytic Docs - Topics/Joins](https://docs.zenlytic.com/data-modeling/topic)
 
-### ZoE & Tips
-- [Zenlytic Docs - ZoE AI Analyst](https://docs.zenlytic.com/zenlytic-ui/zoe)
-- [Zenlytic Docs - ZoE Tips & Tricks](https://docs.zenlytic.com/tips-and-tricks/zoe_tips_and_tricks)
-- [Zenlytic Docs - ZoE Context Ingestion](https://docs.zenlytic.com/tips-and-tricks/zoe_context_ingestion)
-- [Zenlytic Docs - ZoE Memories](https://docs.zenlytic.com/zenlytic-ui/memories)
+### Zoë & Tips
+- [Zenlytic Docs - Zoë AI Analyst](https://docs.zenlytic.com/zenlytic-ui/zoe)
+- [Zenlytic Docs - Zoë Tips & Tricks](https://docs.zenlytic.com/tips-and-tricks/zoe_tips_and_tricks)
+- [Zenlytic Docs - Zoë Context Ingestion](https://docs.zenlytic.com/tips-and-tricks/zoe_context_ingestion)
+- [Zenlytic Docs - Zoë Memories](https://docs.zenlytic.com/zenlytic-ui/memories)
 - [Zenlytic Docs - Entity Drills](https://docs.zenlytic.com/tips-and-tricks/entity-drills)
 - [Zenlytic Docs - Time Metrics](https://docs.zenlytic.com/tips-and-tricks/time-metrics)
 - [Zenlytic Docs - Data Indexing](https://docs.zenlytic.com/tips-and-tricks/data-indexing)
@@ -1220,5 +1220,5 @@ When investigating a new customer's data model, follow this sequence:
 | 1.4 | 2025-02-18 | Added Part 15 lesson from Sticky engagement: flag non-business-friendly field values for customer clarification (name translation pattern). |
 | 1.3 | 2025-02-17 | Added 8 new Part 15 lessons from Flowbird engagement: derived table alias mismatches, single-view topic removal, View Selection Guide pattern, row limits guardrail, poisoned memories, duplicate topic consolidation, Druid case sensitivity, system prompt as operational manual. Added __time nuance to SQL dialect lesson. |
 | 1.2 | 2025-02-13 | Added Part 15 lessons: redundant identifiers as latent risks, don't band-aid SQL dialect issues, identifier cleanup workflow. |
-| 1.1 | 2025-02-13 | Reframed Part 7 for exploratory-only ZoE (Clarity mode deprecated). Removed two-column comparison table, "both modes" language, renamed sections. |
+| 1.1 | 2025-02-13 | Reframed Part 7 for exploratory-only Zoë (Clarity mode deprecated). Removed two-column comparison table, "both modes" language, renamed sections. |
 | 1.0 | 2025-02-12 | Initial complete KB — Parts 1-15. Includes CTO corrections on join cardinality nuance, relationships as preferred join location, and Context Manager note. |
