@@ -1,6 +1,6 @@
 # Zenlytic ZoE Data Model - Complete Knowledge Base
 
-**Version:** 1.3 | **Last Updated:** 2025-02-17
+**Version:** 1.4 | **Last Updated:** 2025-02-18
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how ZoE (the AI analyst) uses the semantic layer.
 
@@ -1177,6 +1177,13 @@ When investigating a new customer's data model, follow this sequence:
   - **User Attribute Handling:** Instructions to use automatically-provided attributes (language, timezone) without asking the user
 - **Don't put field-level guidance in the system prompt** — use `zoe_description` on the field instead. The system prompt is for workspace-wide rules, not individual field documentation.
 
+### Flag Non-Business-Friendly Field Values for Customer Clarification
+- **Dimensions may store cryptic, technical, or integration-level values** (system identifiers, API object names, internal codes) that won't match how business users phrase questions to ZoE. These mappings generally **cannot be inferred from the data alone**.
+- **During data discovery, flag any dimension whose stored values use non-business-friendly naming** — abbreviations, system codes, integration object names, or internal identifiers that a business user wouldn't recognize or use in a question.
+- **Ask the customer what their users call those values.** Don't guess or invent mappings. The customer knows the business terminology; you don't.
+- **Once clarified, apply the standard discoverability pattern:** `searchable: true` on the dimension, `zoe_description` with the explicit stored-value-to-business-name mapping, and `synonyms` with the common business names. This ensures ZoE can translate natural language queries into correct filter values.
+- **Example:** A dimension stores `"network merchant gateway"` but users ask about `"NMI"`. Without the mapping, ZoE can't connect the two. After customer clarification, add `zoe_description` documenting `NMI = 'network merchant gateway'` and `synonyms: [NMI, payment processor]`.
+
 ---
 
 ## Documentation Sources
@@ -1210,6 +1217,7 @@ When investigating a new customer's data model, follow this sequence:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.4 | 2025-02-18 | Added Part 15 lesson from Sticky engagement: flag non-business-friendly field values for customer clarification (name translation pattern). |
 | 1.3 | 2025-02-17 | Added 8 new Part 15 lessons from Flowbird engagement: derived table alias mismatches, single-view topic removal, View Selection Guide pattern, row limits guardrail, poisoned memories, duplicate topic consolidation, Druid case sensitivity, system prompt as operational manual. Added __time nuance to SQL dialect lesson. |
 | 1.2 | 2025-02-13 | Added Part 15 lessons: redundant identifiers as latent risks, don't band-aid SQL dialect issues, identifier cleanup workflow. |
 | 1.1 | 2025-02-13 | Reframed Part 7 for exploratory-only ZoE (Clarity mode deprecated). Removed two-column comparison table, "both modes" language, renamed sections. |
