@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 1.4 | **Last Updated:** 2025-02-18
+**Version:** 1.6 | **Last Updated:** 2025-02-20
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -1024,8 +1024,23 @@ When a column exceeds 10,000 distinct values, indexing is skipped entirely. To i
 
 When creating a new customer folder under Zenlytic-Customers/:
 1. Create the customer subfolder
-2. Create a customer-specific CLAUDE.md with customer name, repo URL, branch info, and any special notes
-3. The shared knowledge in this parent CLAUDE.md is automatically inherited
+2. Clone the customer's Git repository into the subfolder
+3. Create a customer-specific CLAUDE.md with customer name, repo URL, branch info, and any special notes
+4. **Add a `.gitignore` to the customer repo** that excludes `CLAUDE.md` — see rule below
+5. The shared knowledge in this parent CLAUDE.md is automatically inherited
+
+### CRITICAL: Never Commit CLAUDE.md to Customer Repositories
+
+**CLAUDE.md files must NEVER be committed to a customer's Git repository.** These are internal working files for Claude Code and must not appear in the Zenlytic Data Model Editor, be visible to customers, or be ingested by Zoë.
+
+**The canonical CLAUDE.md lives in the `zoe-data-modeling-kb` repository** — that is where it is tracked, versioned, and shared. Customer-specific CLAUDE.md files live on disk in the customer subfolder but are excluded from the customer's Git repo.
+
+**Required setup for every customer repo:**
+1. Add a `.gitignore` file at the repo root containing `CLAUDE.md`
+2. If CLAUDE.md was previously committed, remove it from tracking: `git rm --cached CLAUDE.md`
+3. Commit the `.gitignore` (and the CLAUDE.md removal if applicable)
+
+**When committing changes to a customer repo**, never use `git add -A` or `git add .` without first verifying that CLAUDE.md is in `.gitignore`. Prefer adding specific files by name.
 
 ---
 
@@ -1135,6 +1150,7 @@ When investigating a new customer's data model, follow this sequence:
 - **Removing single-view topics reduces noise** and improves Zoë's topic selection accuracy.
 - **Before deleting:** Migrate any `description`/`zoe_description` from the topic to the view itself (using `description` since `zoe_description` isn't valid on views). Then delete the topic file.
 - **Test:** If a topic has only `base_view` and no additional views in the `views:` section, it's a candidate for removal.
+- **Important distinction:** A topic with `base_view: X` and `views: { Y: {} }` is a **two-view topic** (base + joined), not single-view. The `base_view` is implicit. Only topics where `views:` is empty or absent are truly single-view. For multi-view topics, use the "Test-Before-Remove Workflow" (see below) instead of removing outright.
 
 ### View Selection Guide in System Prompt
 - **When a workspace has many views spanning different domains**, Zoë may scan all views before selecting one, causing slow or incorrect responses. Adding a **View Selection Guide** to the system prompt — mapping question domains to specific views — dramatically improves Zoë's initial view selection.
@@ -1184,6 +1200,53 @@ When investigating a new customer's data model, follow this sequence:
 - **Once clarified, apply the standard discoverability pattern:** `searchable: true` on the dimension, `zoe_description` with the explicit stored-value-to-business-name mapping, and `synonyms` with the common business names. This ensures Zoë can translate natural language queries into correct filter values.
 - **Example:** A dimension stores `"network merchant gateway"` but users ask about `"NMI"`. Without the mapping, Zoë can't connect the two. After customer clarification, add `zoe_description` documenting `NMI = 'network merchant gateway'` and `synonyms: [NMI, payment processor]`.
 
+### Test-Before-Remove Workflow for Multi-View Topics
+When evaluating whether a multi-view topic can be safely removed (because the join is auto-discoverable via identifiers), **always test before removing**. A topic that looks structurally redundant may still be providing critical field-usage guidance through its `description` or `zoe_description`.
+
+**Complete workflow:**
+1. **Identify the candidate** — The topic's join is auto-discoverable (matching identifier names across views, no explicit `sql_on` needed) and the topic has no `always_filter` or `access_filters`.
+2. **Write a test question** — Craft a question that forces Zoë to exercise the cross-view join AND any field-usage guidance the topic provides. The question should be specific enough that incorrect behavior is detectable (e.g., wrong filter, wrong aggregation level).
+3. **Test with the topic in place (baseline)** — Run the question, save both the results AND the generated SQL. This is your "known good" reference.
+4. **Test without the topic** — If possible, temporarily hide the topic (`hidden: true`) or test on a branch without it. Compare both results AND SQL to the baseline.
+5. **If it passes** — Proceed with removal: migrate useful `description`/`zoe_description` content to the view's `description`, delete the topic file, commit.
+6. **Re-test after removal** — Run the same question again. Compare SQL to the baseline. If regression is found, **strengthen the view description** with more forceful language rather than restoring the topic.
+7. **If regression persists** — The topic is providing value that can't be replicated in the view description. Restore it.
+
+**Critical:** Compare the actual SQL generated, not just whether results "look right." Two queries can return superficially similar results while one is fundamentally wrong (e.g., all-category totals vs. filtered-category totals). The SQL WHERE clause is the ground truth.
+
+### Topics Provide More Than Join Context
+- **A topic's `zoe_description` often contains field-usage guidance** (which fields to filter by, default filter values, when filters are required) that materially affects query correctness — independently of the join itself.
+- **When removing a topic, audit its `zoe_description` for three types of content:**
+  1. **Join context** — "X joins to Y on Z." This is redundant if identifiers handle it. Safe to drop.
+  2. **Field-usage guidance** — "Filter by category_l1 for broad categories." This MUST be migrated to the view `description` or Zoë will lose it.
+  3. **Domain scoping** — "Use this for questions about [domain]." Useful for topic selection but becomes irrelevant once the topic is gone. Drop unless the view needs its own scoping guidance.
+- **The most dangerous removal scenario** is when the topic appears structurally redundant (auto-discoverable join) but its `zoe_description` contains field-usage guidance that Zoë relies on. The join works fine without the topic, but Zoë stops applying critical filters.
+
+### Passive vs. Forceful Description Language
+- **Zoë responds to the intensity of instructions.** Passive language like "Filter spend by SIEVO category levels" may be ignored. Forceful language like "IMPORTANT: you MUST filter by the appropriate SIEVO category level. Without this filter, spend totals will include ALL categories and produce incorrect results" gets consistent compliance.
+- **When migrating guidance from a topic `zoe_description` to a view `description`, upgrade the language intensity.** Topic descriptions have natural prominence (they're the first thing Zoë reads when routing a query). View descriptions compete with many other fields for attention — so the language must be stronger to achieve the same effect.
+- **Effective forceful patterns:**
+  - Prefix critical instructions with `IMPORTANT -` or `CRITICAL -`
+  - Use `you MUST` instead of passive suggestions
+  - State the negative consequence: "Without this filter, results will be incorrect"
+  - Be specific about which field to use and when (e.g., "Use category_l1_sievo for broad categories like 'Purchased Components'")
+- **Test after strengthening.** Even forceful language may need iteration. Run the same test question and compare SQL output to the known-good baseline.
+
+### Base View Is Implicit in Topic View Counts
+- **A topic with `base_view: X` and `views: { Y: {} }` is a two-view topic**, not a single-view topic. The `base_view` is always implicit — it's the anchor table that all joined views connect to.
+- **The "Single-View Topics Are Redundant" rule (see above) applies only when the `views:` section is empty or contains no additional views.** If the `views:` section lists even one view (e.g., `purchased_material_cost: {}`), the topic defines a join between the base view and that view — making it a multi-view topic that requires the test-before-remove workflow.
+- **Common confusion:** A topic's `zoe_description` may mention two views (base + joined), leading you to think the `views:` section was a workaround for specifying multiple views. It's not — it's simply describing the full join path that the topic defines (`base_view` → `views` entry).
+
+### SQL Comparison Is Essential for Topic Removal Validation
+- **When validating topic removal, always compare the generated SQL — not just the query results.** Two queries can return results that look superficially similar or both "reasonable" while one is fundamentally wrong.
+- **Example from SBD engagement:** With the procurement topic, Zoë's SQL included `WHERE CATEGORY_L1_SIEVO = 'Purchased Components'` and returned the correct top suppliers for purchased components. Without the topic, Zoë's SQL had no SIEVO filter at all and returned top suppliers across ALL categories — a completely different (and incorrect) answer. Both result sets were plausible lists of suppliers, but one was scoped correctly and the other wasn't.
+- **What to compare in SQL:**
+  1. **WHERE clause** — Are the same filters being applied? Missing filters are the #1 regression when removing topics.
+  2. **JOIN clause** — Is Zoë using the same join path? Different join paths may produce different result sets.
+  3. **GROUP BY / aggregation** — Is the granularity correct?
+  4. **Table references** — Is Zoë querying the right tables?
+- **Save the baseline SQL** from the "with topic" test. Use it as a diff target for all subsequent tests.
+
 ---
 
 ## Documentation Sources
@@ -1217,6 +1280,8 @@ When investigating a new customer's data model, follow this sequence:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.6 | 2025-02-20 | Added CLAUDE.md exclusion rule to New Customer Setup: CLAUDE.md must never be committed to customer repos, .gitignore required, canonical copy lives in zoe-data-modeling-kb only. |
+| 1.5 | 2025-02-20 | Added 5 new Part 15 lessons from SBD Production engagement: test-before-remove workflow for multi-view topics, topics provide more than join context (field-usage guidance), passive vs. forceful description language, base view is implicit in topic view counts, SQL comparison is essential for validation. |
 | 1.4 | 2025-02-18 | Added Part 15 lesson from Sticky engagement: flag non-business-friendly field values for customer clarification (name translation pattern). |
 | 1.3 | 2025-02-17 | Added 8 new Part 15 lessons from Flowbird engagement: derived table alias mismatches, single-view topic removal, View Selection Guide pattern, row limits guardrail, poisoned memories, duplicate topic consolidation, Druid case sensitivity, system prompt as operational manual. Added __time nuance to SQL dialect lesson. |
 | 1.2 | 2025-02-13 | Added Part 15 lessons: redundant identifiers as latent risks, don't band-aid SQL dialect issues, identifier cleanup workflow. |
