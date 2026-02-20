@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 1.6 | **Last Updated:** 2025-02-20
+**Version:** 1.7 | **Last Updated:** 2025-02-20
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -514,7 +514,7 @@ Zoë (Zenlytic's AI analyst) writes SQL to answer user questions, using the sema
 
 **Warning**: A potential issue can arise if the topic implies illogical or counter-intuitive joins. For example, if a topic says it's valid to make many-to-many joins between large fact tables, Zoë may be misled into thinking it's a safe join when it will actually cause a fan-out.
 
-**Best Practice**: Any `one_to_many` or `many_to_many` join in a topic *can* potentially degrade performance — but it won't necessarily if the join makes logical sense to Zoë. For example, a one-to-many from `orders` to `discounts` is intuitive and unlikely to cause issues, while a one-to-many between obscure tables with non-obvious names (e.g., `brv_si_deal_xt` to `brv_si_entity_xt`) will confuse Zoë because it can't reason well about the actual concepts. The key factor is whether Zoë can understand what the join represents, not just the cardinality.
+**Best Practice**: Any `one_to_many` or `many_to_many` join in a topic *can* potentially degrade performance — but it won't necessarily if the join makes logical sense to Zoë. For example, a one-to-many from `orders` to `discounts` is intuitive and unlikely to cause issues, while a one-to-many between obscure tables with non-obvious names (e.g., `tbl_fact_txn_ext` to `tbl_dim_entity_ext`) will confuse Zoë because it can't reason well about the actual concepts. The key factor is whether Zoë can understand what the join represents, not just the cardinality.
 
 **Identifiers**: Zoë sees identifiers (primary keys, foreign keys, and join-type identifiers). Identifiers provide join context alongside topics and model-level relationships.
 
@@ -625,6 +625,7 @@ This is the foundational test for every data model. If the naming, descriptions,
 13. **Configure entity drills** with `drill_fields` on primary key dimensions to enable contextual navigation (see Part 12)
 14. **Use Zoë Memories** for company-specific data interpretation patterns — create them from chat or the Memory Portal (see Part 9)
 15. **Maintain consistent database capitalization** in searchable fields — Zoë applies indexed values directly to filter conditions
+16. **Design for model-agnostic robustness** — different users may use different LLM backends; build the semantic layer so it works across all supported models, not just the most capable one (see Part 16)
 
 ### Zoë AI Data Analyst Details
 
@@ -639,7 +640,7 @@ This is the foundational test for every data model. If the naming, descriptions,
 - Dynamic Fields: Zoë can create user-specific measures and dimensions (for Develop+ roles when enabled), but cannot promote them to the global model — users must handle promotion manually through the UI
 
 **Configuration Options:**
-- Model Selection: Users switch between LLM models mid-conversation via dropdown
+- Model Selection: Users switch between LLM models mid-conversation via dropdown (see Part 16 for how model choice affects SQL generation quality and data model design)
 - Input Methods: Voice transcription (`cmd + i` to toggle recording), file attachments (images, CSVs, PDFs — limit 5)
 - Integration: Slack (@Zenlytic tagging required) and Microsoft Teams support
 
@@ -1138,7 +1139,7 @@ When investigating a new customer's data model, follow this sequence:
 ### Terminology Discipline
 - **Never invent customer terminology.** Only use terms that exist in the customer's data model, memory definitions, or system prompts. If you need a label, ask the customer what they call it.
 - **Don't assume field names match business concepts.** A field called `channel` may not contain what business users call "channels." Always verify with `SELECT DISTINCT`.
-- **Document field-to-concept mappings** in `zoe_description` when the field name doesn't match the business term (e.g., `source_organization_uri` is actually the aggregator platform name like 'ubereats.com').
+- **Document field-to-concept mappings** in `zoe_description` when the field name doesn't match the business term (e.g., `source_org_uri` is actually the platform name like 'partner_platform.com').
 
 ### Derived Table Alias Mismatches
 - **Aliases in derived table SQL must exactly match the column names referenced by dimensions.** When a derived table uses functions like `LATEST_BY`, `FIRST_VALUE`, or similar, the output alias can silently differ from the original column name. A dimension referencing `${TABLE}."full.column.name"` will fail at query time if the derived table aliased it as `"shortened.name"`.
@@ -1154,7 +1155,7 @@ When investigating a new customer's data model, follow this sequence:
 
 ### View Selection Guide in System Prompt
 - **When a workspace has many views spanning different domains**, Zoë may scan all views before selecting one, causing slow or incorrect responses. Adding a **View Selection Guide** to the system prompt — mapping question domains to specific views — dramatically improves Zoë's initial view selection.
-- **Format:** A simple bulleted list mapping question types to view names (e.g., "Parking ticket questions → Use parking_tickets_v2"). Include geographic or model scope notes (e.g., "Druid, European parks only").
+- **Format:** A simple bulleted list mapping question types to view names (e.g., "Transaction questions → Use transactions_v2"). Include geographic or database scope notes (e.g., "Druid connection, regional data only").
 - **This complements, not replaces, good `description` fields on views.** The system prompt guide gives Zoë a quick routing table before it reads individual view metadata.
 - **Include negative guidance:** Explicitly state which views should NOT be used for certain question types to prevent cross-domain confusion.
 
@@ -1198,7 +1199,7 @@ When investigating a new customer's data model, follow this sequence:
 - **During data discovery, flag any dimension whose stored values use non-business-friendly naming** — abbreviations, system codes, integration object names, or internal identifiers that a business user wouldn't recognize or use in a question.
 - **Ask the customer what their users call those values.** Don't guess or invent mappings. The customer knows the business terminology; you don't.
 - **Once clarified, apply the standard discoverability pattern:** `searchable: true` on the dimension, `zoe_description` with the explicit stored-value-to-business-name mapping, and `synonyms` with the common business names. This ensures Zoë can translate natural language queries into correct filter values.
-- **Example:** A dimension stores `"network merchant gateway"` but users ask about `"NMI"`. Without the mapping, Zoë can't connect the two. After customer clarification, add `zoe_description` documenting `NMI = 'network merchant gateway'` and `synonyms: [NMI, payment processor]`.
+- **Example:** A dimension stores `"electronic_funds_transfer"` but users ask about `"EFT"`. Without the mapping, Zoë can't connect the two. After customer clarification, add `zoe_description` documenting `EFT = 'electronic_funds_transfer'` and `synonyms: [EFT, wire transfer]`.
 
 ### Test-Before-Remove Workflow for Multi-View Topics
 When evaluating whether a multi-view topic can be safely removed (because the join is auto-discoverable via identifiers), **always test before removing**. A topic that looks structurally redundant may still be providing critical field-usage guidance through its `description` or `zoe_description`.
@@ -1223,29 +1224,150 @@ When evaluating whether a multi-view topic can be safely removed (because the jo
 - **The most dangerous removal scenario** is when the topic appears structurally redundant (auto-discoverable join) but its `zoe_description` contains field-usage guidance that Zoë relies on. The join works fine without the topic, but Zoë stops applying critical filters.
 
 ### Passive vs. Forceful Description Language
-- **Zoë responds to the intensity of instructions.** Passive language like "Filter spend by SIEVO category levels" may be ignored. Forceful language like "IMPORTANT: you MUST filter by the appropriate SIEVO category level. Without this filter, spend totals will include ALL categories and produce incorrect results" gets consistent compliance.
+- **Zoë responds to the intensity of instructions.** Passive language like "Filter spend by the appropriate category levels" may be ignored. Forceful language like "IMPORTANT: you MUST filter by the appropriate category level. Without this filter, spend totals will include ALL categories and produce incorrect results" gets consistent compliance.
 - **When migrating guidance from a topic `zoe_description` to a view `description`, upgrade the language intensity.** Topic descriptions have natural prominence (they're the first thing Zoë reads when routing a query). View descriptions compete with many other fields for attention — so the language must be stronger to achieve the same effect.
 - **Effective forceful patterns:**
   - Prefix critical instructions with `IMPORTANT -` or `CRITICAL -`
   - Use `you MUST` instead of passive suggestions
   - State the negative consequence: "Without this filter, results will be incorrect"
-  - Be specific about which field to use and when (e.g., "Use category_l1_sievo for broad categories like 'Purchased Components'")
+  - Be specific about which field to use and when (e.g., "Use category_level_1 for broad categories like 'Raw Materials'")
 - **Test after strengthening.** Even forceful language may need iteration. Run the same test question and compare SQL output to the known-good baseline.
 
 ### Base View Is Implicit in Topic View Counts
 - **A topic with `base_view: X` and `views: { Y: {} }` is a two-view topic**, not a single-view topic. The `base_view` is always implicit — it's the anchor table that all joined views connect to.
-- **The "Single-View Topics Are Redundant" rule (see above) applies only when the `views:` section is empty or contains no additional views.** If the `views:` section lists even one view (e.g., `purchased_material_cost: {}`), the topic defines a join between the base view and that view — making it a multi-view topic that requires the test-before-remove workflow.
+- **The "Single-View Topics Are Redundant" rule (see above) applies only when the `views:` section is empty or contains no additional views.** If the `views:` section lists even one view (e.g., `related_costs: {}`), the topic defines a join between the base view and that view — making it a multi-view topic that requires the test-before-remove workflow.
 - **Common confusion:** A topic's `zoe_description` may mention two views (base + joined), leading you to think the `views:` section was a workaround for specifying multiple views. It's not — it's simply describing the full join path that the topic defines (`base_view` → `views` entry).
 
 ### SQL Comparison Is Essential for Topic Removal Validation
 - **When validating topic removal, always compare the generated SQL — not just the query results.** Two queries can return results that look superficially similar or both "reasonable" while one is fundamentally wrong.
-- **Example from SBD engagement:** With the procurement topic, Zoë's SQL included `WHERE CATEGORY_L1_SIEVO = 'Purchased Components'` and returned the correct top suppliers for purchased components. Without the topic, Zoë's SQL had no SIEVO filter at all and returned top suppliers across ALL categories — a completely different (and incorrect) answer. Both result sets were plausible lists of suppliers, but one was scoped correctly and the other wasn't.
+- **Example from a customer engagement:** With a procurement topic in place, Zoë's SQL included a category filter (e.g., `WHERE category_level = 'Target Category'`) and returned the correct top suppliers for that category. Without the topic, Zoë's SQL had no category filter at all and returned top suppliers across ALL categories — a completely different (and incorrect) answer. Both result sets were plausible lists of suppliers, but one was scoped correctly and the other wasn't.
 - **What to compare in SQL:**
   1. **WHERE clause** — Are the same filters being applied? Missing filters are the #1 regression when removing topics.
   2. **JOIN clause** — Is Zoë using the same join path? Different join paths may produce different result sets.
   3. **GROUP BY / aggregation** — Is the granularity correct?
   4. **Table references** — Is Zoë querying the right tables?
 - **Save the baseline SQL** from the "with topic" test. Use it as a diff target for all subsequent tests.
+
+---
+
+## Part 16: LLM Model Considerations
+
+Zoë supports multiple LLM backends, and the choice of model materially affects SQL generation quality, instruction adherence, and how effectively the semantic layer context is utilized. This section documents observable behavioral patterns to help data modelers build robust semantic layers that perform well regardless of which model is selected.
+
+### Available Model Families and Zenlytic Recommendations
+
+Zoë currently supports models from two providers:
+- **Anthropic Claude** (Sonnet, Opus variants) — **Recommended.** Zenlytic recommends Sonnet 4.5 as the minimum, with Opus 4.6 as the ideal choice for complex data models.
+- **OpenAI GPT** (GPT-4, GPT-5 variants) — Offered for customers who prefer or require OpenAI models. Functional, but exhibits different behavioral patterns that affect data modeling strategy (see below).
+
+Users can switch models mid-conversation via a dropdown in the Zoë interface. Different users in the same workspace may use different models. When newer models are released and tested, recommendations may shift.
+
+### Why Model Choice Matters for Data Modeling
+
+The LLM model is the "interpreter" that reads the semantic layer context (descriptions, topics, identifiers, system prompts, memories) and generates SQL. Different models exhibit different strengths and weaknesses in:
+
+| Capability | What It Affects |
+|-----------|----------------|
+| **Instruction adherence** | Whether Zoë follows forceful guidance in `zoe_description`, view `description`, and system prompts (e.g., "you MUST filter by X") |
+| **Context utilization depth** | How much of the semantic layer the model actually weighs — some models skim, others deeply reason about relationships |
+| **SQL dialect accuracy** | Correctness of generated SQL syntax for the target warehouse (Snowflake, Databricks, Druid, BigQuery, etc.) |
+| **Join reasoning** | Ability to navigate multi-hop joins, avoid fan-outs, and select the right join path from multiple options |
+| **Ambiguity resolution** | How the model handles vague user questions — does it make reasonable assumptions or produce incorrect guesses? |
+| **Complex query planning** | Performance on multi-step analytical queries (CTEs, window functions, subqueries, period-over-period comparisons) |
+
+### Observable Behavioral Differences
+
+> **Disclaimer:** Model capabilities change rapidly with new releases. The observations below reflect patterns seen in production customer workspaces as of early 2025. Re-evaluate when new model versions are released.
+
+**Autonomy vs. Confirmation-Seeking (Most Important Difference):**
+- **Anthropic models tend to make reasonable assumptions and deliver results**, then offer to refine. When facing ambiguity (e.g., which unit of measure, which date grain), they explore the data autonomously, resolve the ambiguity themselves, and return an answer.
+- **GPT models tend to stop and ask clarifying questions before executing.** When facing the same ambiguity, they surface the uncertainty to the user and wait for confirmation before running any query.
+- **Impact on user experience:** For business users who want quick answers, the autonomous approach delivers immediate value — users see data and can iterate. The confirmation-seeking approach adds round-trips to the conversation, which slows time-to-insight and can frustrate non-technical users who may not know how to answer the clarifying questions (e.g., "Do you want forecast units or GSV?" may confuse a user who just wants "demand history").
+- **Impact on data modeling:** With confirmation-seeking models, the data model must pre-resolve more ambiguity — richer `zoe_description` guidance, more explicit `default_date` and `canon_date` settings, and clearer field naming — so the model doesn't need to ask. With autonomous models, the same guidance helps too, but the model can often navigate without it.
+
+**Data Exploration and Error Recovery:**
+- Anthropic models actively explore the data when initial approaches fail — checking multiple views, running discovery queries (`SELECT DISTINCT`), pivoting to alternative tables when columns are NULL or missing in one view. They work through obstacles autonomously.
+- GPT models are more likely to surface errors directly to the user. If a column returns "invalid identifier," they report the error and ask the user to clarify rather than exploring alternative paths.
+- **Example from a customer workspace:** Given the same question asking for demand history filtered by a specific division code, Opus 4.6 discovered the mapping between the division code and its business name, navigated NULL division fields in the monthly view, pivoted to the weekly history view, and returned a chart + data table with 20+ archival snapshots. GPT-5.1 identified the right view and filters but stopped to ask two clarifying questions before running any query, and surfaced an "invalid identifier" error as a blocker.
+
+**Analytical Capability Is Comparable — Autonomy Is Not:**
+- When both models are given the same analytical task (e.g., computing price elasticity from POS data using log-log regression), they arrive at **equivalent analytical conclusions** — same regression coefficients, same directional interpretation, same business recommendation.
+- The difference is in how they get there: Opus 4.6 autonomously chose the price proxy (retail USD / quantity), scoped to all markets, pulled 6 months of weekly data, ran the regression, and returned the elasticity estimate, projected impact, and caveats — all without asking the user anything. GPT-5.1 stopped to ask "What should I use as the price measure?" and "What market scope?" before executing anything.
+- Once GPT received explicit answers to its clarifying questions, it produced an equally thorough analysis — arguably even more structured in presentation (numbered methodology sections, explicit formula documentation).
+- **Key insight:** The capability gap between models is not in analytical depth — it's in the **autonomy to make reasonable assumptions and start working**. GPT needs the user to pre-resolve ambiguity; Anthropic models resolve it themselves and deliver results immediately.
+- **Data modeling implication:** For workspaces where users rely on GPT models, pre-resolve common analytical ambiguities in `zoe_description` (e.g., "for price elasticity calculations, use POS_RETAIL_USD / POS_QTY as the price proxy" or "default scope is all customers/markets unless the user specifies otherwise"). This eliminates the round-trip that GPT would otherwise require.
+
+**Instruction Following & Context Depth:**
+- Anthropic models (especially Opus-class) are significantly better at following detailed `zoe_description` guidance, especially multi-paragraph instructions with conditional logic ("if X, use Y; if Z, use W"). They more reliably apply critical filters, use the correct fields, and respect negative guidance ("do NOT use field X").
+- GPT models may ignore guidance buried in long descriptions, relying instead on field names and basic type information. For workspaces using GPT models, **concise, top-loaded descriptions** work better than detailed multi-paragraph instructions.
+
+**SQL Complexity Ceiling:**
+- Anthropic models handle complex analytical patterns better: multi-CTE queries, window functions for running totals, period-over-period comparisons with date arithmetic, and nested aggregations.
+- GPT models may produce syntactically valid but logically incorrect SQL on complex queries — e.g., applying a window function at the wrong granularity or missing a partition clause.
+
+**Richness of Output:**
+- Anthropic models tend to deliver richer responses: charts, data tables, applied filter documentation, key observations about trends, and proactive drill-down suggestions.
+- GPT models tend to deliver more structured, plan-oriented responses — describing what they will do rather than doing it immediately.
+
+**Join Path Selection:**
+- Anthropic models with stronger reasoning tend to select the correct join path when multiple options exist (identifier auto-discovery vs. topic-defined `sql_on`). They are also better at avoiding fan-out traps documented in view descriptions.
+- GPT models' join reasoning means the data model must be more explicit — fewer ambiguous join paths, more aggressive use of `hidden: true` on technical fields, and stronger guardrails in topic `zoe_description`.
+
+### Practical Implications for Data Model Design
+
+The key insight: **a well-built semantic layer should work across all supported models, but the margin for error varies by model capability.**
+
+#### Design for the Lowest Common Denominator, Optimize for the Best
+
+1. **Universal baseline (all models):**
+   - Clear, unambiguous field names (no abbreviations, no duplicates)
+   - `searchable: true` on all categorical filter dimensions
+   - `default_date` on every view with time-series measures
+   - `hidden: true` on all technical/internal fields
+   - Explicit `sql_on` joins in topics for any non-obvious relationships
+   - At least basic `description` on every view and key fields
+
+2. **Stronger models unlock more from the semantic layer:**
+   - Multi-paragraph `zoe_description` with conditional logic is followed more reliably
+   - Complex system prompt rules (row limits, view selection guides, dialect-specific column avoidance) are adhered to more consistently
+   - Models with deeper reasoning can navigate identifier auto-discovery + topic joins simultaneously without confusion
+   - Nuanced business logic in descriptions (e.g., "use field A for questions about X, but field B for questions about Y") works as intended
+
+3. **For GPT models or less capable models, compensate with stricter structure:**
+   - Keep descriptions shorter and more direct — lead with the most critical instruction
+   - Pre-resolve ambiguity that the model would otherwise ask the user about (e.g., specify the default unit of measure in `zoe_description`, set `default_date` on every view)
+   - Prefer explicit topic `sql_on` over relying on identifier auto-discovery
+   - Use `hidden: true` more aggressively to reduce the field space the model must reason over
+   - Add more memories for common query patterns to provide explicit SQL examples
+   - Consider simplifying join topologies (fewer hop chains, fewer many-to-many relationships)
+
+#### Testing Across Models
+
+When validating data model changes:
+- **Test with at least two model families** if the workspace's users use multiple models
+- **Compare the generated SQL across models**, not just the results — a less capable model may produce correct results on simple queries but fail on edge cases
+- **Document model-specific regressions** — if a query works on one model but fails on another, that's a signal the semantic layer needs to be more explicit (which helps all models)
+
+### Model Selection Guidance for Customers
+
+**Zenlytic's recommendation:** Anthropic Claude Sonnet 4.5 as the minimum, Opus 4.6 as the ideal. GPT models are available but are not the recommended default.
+
+When advising customers on model selection:
+- **Start with the Zenlytic recommendation.** Anthropic models consistently demonstrate stronger autonomous data exploration, richer output, and better instruction adherence — the behaviors that most impact Zoë's usefulness as a data analyst.
+- **If a customer requires GPT models**, account for the behavioral differences during data modeling: write shorter, more direct descriptions; pre-resolve ambiguity in field naming and `zoe_description`; add more memories for common query patterns; and expect the user experience to include more clarification round-trips.
+- **Recommend testing.** Have customers run their top 10-20 most common questions across available models and compare both results and SQL quality. This validates the recommendation against their specific data model and query patterns.
+- **Cost and latency trade-offs exist.** More capable models are generally slower and more expensive per query. For simple, well-structured data models with straightforward queries, a faster model may be equally effective and provide a better user experience.
+- **The data model quality is the dominant variable.** A well-built semantic layer with clear names, rich descriptions, and explicit joins will outperform a poorly-built one on any model. Model selection is a secondary optimization after the semantic layer is solid.
+- **Re-evaluate with new releases.** Model capabilities evolve rapidly. When new model versions are released by either provider, test them against the same benchmark questions before updating recommendations.
+
+### Impact on System Prompt and Description Strategy
+
+Because different models process instructions with different fidelity:
+
+- **System prompt instructions should be written for the least capable model** — short, direct, unambiguous. If a less capable model can follow it, a more capable model will too.
+- **Critical instructions should use forceful language regardless of model** — "IMPORTANT:", "you MUST", "NEVER" (see Part 15: Passive vs. Forceful Description Language). This costs nothing and dramatically improves compliance across all models.
+- **Avoid relying on implicit reasoning.** Don't assume the model will "figure out" that a join is dangerous — state it explicitly. Don't assume the model will infer the right date field — set `default_date` and `canon_date`.
+- **Memories become more valuable for GPT models.** Explicit query/response pairs give the model a concrete example to follow rather than requiring it to reason from first principles. This is especially important for reducing the confirmation-seeking behavior — a memory that shows "for this question type, here is the answer" reduces the model's inclination to ask clarifying questions.
 
 ---
 
@@ -1280,10 +1402,11 @@ When evaluating whether a multi-view topic can be safely removed (because the jo
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.7 | 2025-02-20 | Added Part 16: LLM Model Considerations — documents how different LLM backends (Anthropic Claude, OpenAI GPT) affect Zoë's SQL generation, instruction adherence, and join reasoning. Includes Zenlytic model recommendations (Sonnet 4.5 min, Opus 4.6 ideal), autonomy vs. confirmation-seeking behavioral patterns with production evidence, analytical capability parity example (price elasticity), data exploration differences, GPT-specific data modeling compensations, and impact on description/system prompt strategy. Obfuscated all customer-identifying references throughout KB. |
 | 1.6 | 2025-02-20 | Added CLAUDE.md exclusion rule to New Customer Setup: CLAUDE.md must never be committed to customer repos, .gitignore required, canonical copy lives in zoe-data-modeling-kb only. |
-| 1.5 | 2025-02-20 | Added 5 new Part 15 lessons from SBD Production engagement: test-before-remove workflow for multi-view topics, topics provide more than join context (field-usage guidance), passive vs. forceful description language, base view is implicit in topic view counts, SQL comparison is essential for validation. |
-| 1.4 | 2025-02-18 | Added Part 15 lesson from Sticky engagement: flag non-business-friendly field values for customer clarification (name translation pattern). |
-| 1.3 | 2025-02-17 | Added 8 new Part 15 lessons from Flowbird engagement: derived table alias mismatches, single-view topic removal, View Selection Guide pattern, row limits guardrail, poisoned memories, duplicate topic consolidation, Druid case sensitivity, system prompt as operational manual. Added __time nuance to SQL dialect lesson. |
+| 1.5 | 2025-02-20 | Added 5 new Part 15 lessons from production customer engagement: test-before-remove workflow for multi-view topics, topics provide more than join context (field-usage guidance), passive vs. forceful description language, base view is implicit in topic view counts, SQL comparison is essential for validation. |
+| 1.4 | 2025-02-18 | Added Part 15 lesson from customer engagement: flag non-business-friendly field values for customer clarification (name translation pattern). |
+| 1.3 | 2025-02-17 | Added 8 new Part 15 lessons from customer engagement: derived table alias mismatches, single-view topic removal, View Selection Guide pattern, row limits guardrail, poisoned memories, duplicate topic consolidation, Druid case sensitivity, system prompt as operational manual. Added __time nuance to SQL dialect lesson. |
 | 1.2 | 2025-02-13 | Added Part 15 lessons: redundant identifiers as latent risks, don't band-aid SQL dialect issues, identifier cleanup workflow. |
 | 1.1 | 2025-02-13 | Reframed Part 7 for exploratory-only Zoë (Clarity mode deprecated). Removed two-column comparison table, "both modes" language, renamed sections. |
 | 1.0 | 2025-02-12 | Initial complete KB — Parts 1-15. Includes CTO corrections on join cardinality nuance, relationships as preferred join location, and Context Manager note. |
