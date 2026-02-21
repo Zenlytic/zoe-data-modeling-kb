@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 1.7 | **Last Updated:** 2025-02-20
+**Version:** 1.8 | **Last Updated:** 2025-02-21
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -1252,13 +1252,15 @@ When evaluating whether a multi-view topic can be safely removed (because the jo
 
 ## Part 16: LLM Model Considerations
 
-Zoë supports multiple LLM backends, and the choice of model materially affects SQL generation quality, instruction adherence, and how effectively the semantic layer context is utilized. This section documents observable behavioral patterns to help data modelers build robust semantic layers that perform well regardless of which model is selected.
+Zoë supports multiple LLM backends, and the choice of model materially affects SQL generation quality, error recovery, instruction adherence, and how effectively the semantic layer context is utilized. This section documents observable behavioral patterns — tested across four models on identical questions against a production workspace — to help data modelers build robust semantic layers that perform well regardless of which model is selected.
 
-### Available Model Families and Zenlytic Recommendations
+### Available Models and Zenlytic Recommendations
 
 Zoë currently supports models from two providers:
-- **Anthropic Claude** (Sonnet, Opus variants) — **Recommended.** Zenlytic recommends Sonnet 4.5 as the minimum, with Opus 4.6 as the ideal choice for complex data models.
+- **Anthropic Claude** (Sonnet 4.5, Sonnet 4.6, Opus 4.6) — **Recommended.** Zenlytic recommends Opus 4.6 as the ideal choice for complex data models. Sonnet 4.5 is the minimum recommended baseline.
 - **OpenAI GPT** (GPT-4, GPT-5 variants) — Offered for customers who prefer or require OpenAI models. Functional, but exhibits different behavioral patterns that affect data modeling strategy (see below).
+
+> **Note on Sonnet 4.6:** This model was released recently (early 2025). Initial testing shows strong performance, but behavioral patterns may shift as the model stabilizes. Retest in a few weeks to confirm whether its observed behaviors are stable. The observations below reflect early testing results.
 
 Users can switch models mid-conversation via a dropdown in the Zoë interface. Different users in the same workspace may use different models. When newer models are released and tested, recommendations may shift.
 
@@ -1268,54 +1270,113 @@ The LLM model is the "interpreter" that reads the semantic layer context (descri
 
 | Capability | What It Affects |
 |-----------|----------------|
-| **Instruction adherence** | Whether Zoë follows forceful guidance in `zoe_description`, view `description`, and system prompts (e.g., "you MUST filter by X") |
+| **Autonomy** | Whether the model executes immediately or asks clarifying questions first |
+| **Error recovery** | How the model handles null data, broken queries, or unexpected results — does it self-correct, present broken results, or stop? |
+| **Instruction adherence** | Whether Zoë follows forceful guidance in `zoe_description`, view `description`, and system prompts |
 | **Context utilization depth** | How much of the semantic layer the model actually weighs — some models skim, others deeply reason about relationships |
-| **SQL dialect accuracy** | Correctness of generated SQL syntax for the target warehouse (Snowflake, Databricks, Druid, BigQuery, etc.) |
-| **Join reasoning** | Ability to navigate multi-hop joins, avoid fan-outs, and select the right join path from multiple options |
-| **Ambiguity resolution** | How the model handles vague user questions — does it make reasonable assumptions or produce incorrect guesses? |
-| **Complex query planning** | Performance on multi-step analytical queries (CTEs, window functions, subqueries, period-over-period comparisons) |
+| **Proactive interpretation** | Whether the model flags data quality anomalies, provides per-record narratives, or adds analytical context beyond what was asked |
+| **Domain awareness** | Whether the model discovers and applies domain-specific context (fiscal calendars, business hierarchies, naming conventions) |
+| **SQL dialect accuracy** | Correctness of generated SQL syntax for the target warehouse |
+| **Join reasoning** | Ability to navigate multi-hop joins, avoid fan-outs, and select the right join path |
+| **Complex query planning** | Performance on multi-step analytical queries (CTEs, window functions, subqueries) |
 
-### Observable Behavioral Differences
+### Four-Model Behavioral Framework
 
-> **Disclaimer:** Model capabilities change rapidly with new releases. The observations below reflect patterns seen in production customer workspaces as of early 2025. Re-evaluate when new model versions are released.
+> **Disclaimer:** Model capabilities change rapidly with new releases. The observations below reflect patterns seen in production customer workspaces as of early 2025, tested with identical questions across all four models. Re-evaluate when new model versions are released. Sonnet 4.6 is newly released and should be retested after it has had time to stabilize.
 
-**Autonomy vs. Confirmation-Seeking (Most Important Difference):**
-- **Anthropic models tend to make reasonable assumptions and deliver results**, then offer to refine. When facing ambiguity (e.g., which unit of measure, which date grain), they explore the data autonomously, resolve the ambiguity themselves, and return an answer.
-- **GPT models tend to stop and ask clarifying questions before executing.** When facing the same ambiguity, they surface the uncertainty to the user and wait for confirmation before running any query.
-- **Impact on user experience:** For business users who want quick answers, the autonomous approach delivers immediate value — users see data and can iterate. The confirmation-seeking approach adds round-trips to the conversation, which slows time-to-insight and can frustrate non-technical users who may not know how to answer the clarifying questions (e.g., "Do you want forecast units or GSV?" may confuse a user who just wants "demand history").
-- **Impact on data modeling:** With confirmation-seeking models, the data model must pre-resolve more ambiguity — richer `zoe_description` guidance, more explicit `default_date` and `canon_date` settings, and clearer field naming — so the model doesn't need to ask. With autonomous models, the same guidance helps too, but the model can often navigate without it.
+Testing revealed that behavioral differences exist **within** the Anthropic model family, not just between Anthropic and GPT. The four models form a clear tier structure:
 
-**Data Exploration and Error Recovery:**
-- Anthropic models actively explore the data when initial approaches fail — checking multiple views, running discovery queries (`SELECT DISTINCT`), pivoting to alternative tables when columns are NULL or missing in one view. They work through obstacles autonomously.
-- GPT models are more likely to surface errors directly to the user. If a column returns "invalid identifier," they report the error and ask the user to clarify rather than exploring alternative paths.
-- **Example from a customer workspace:** Given the same question asking for demand history filtered by a specific division code, Opus 4.6 discovered the mapping between the division code and its business name, navigated NULL division fields in the monthly view, pivoted to the weekly history view, and returned a chart + data table with 20+ archival snapshots. GPT-5.1 identified the right view and filters but stopped to ask two clarifying questions before running any query, and surfaced an "invalid identifier" error as a blocker.
+| Tier | Model | Summary |
+|------|-------|---------|
+| **Tier 1** | **Opus 4.6** | Fully autonomous, deepest error recovery, domain-aware, delivers the most complete answers |
+| **Tier 2** | **Sonnet 4.6** | Semi-autonomous (surfaces ambiguity but self-resolves), strong error recovery, proactive interpretation |
+| **Tier 3** | **Sonnet 4.5** | Fully autonomous but shallow — executes immediately, minimal error recovery, may present broken results |
+| **Tier 4** | **GPT 5.1** | Executes initial query but stops on errors — highest methodology transparency, lowest answer delivery rate |
 
-**Analytical Capability Is Comparable — Autonomy Is Not:**
-- When both models are given the same analytical task (e.g., computing price elasticity from POS data using log-log regression), they arrive at **equivalent analytical conclusions** — same regression coefficients, same directional interpretation, same business recommendation.
-- The difference is in how they get there: Opus 4.6 autonomously chose the price proxy (retail USD / quantity), scoped to all markets, pulled 6 months of weekly data, ran the regression, and returned the elasticity estimate, projected impact, and caveats — all without asking the user anything. GPT-5.1 stopped to ask "What should I use as the price measure?" and "What market scope?" before executing anything.
-- Once GPT received explicit answers to its clarifying questions, it produced an equally thorough analysis — arguably even more structured in presentation (numbered methodology sections, explicit formula documentation).
-- **Key insight:** The capability gap between models is not in analytical depth — it's in the **autonomy to make reasonable assumptions and start working**. GPT needs the user to pre-resolve ambiguity; Anthropic models resolve it themselves and deliver results immediately.
-- **Data modeling implication:** For workspaces where users rely on GPT models, pre-resolve common analytical ambiguities in `zoe_description` (e.g., "for price elasticity calculations, use POS_RETAIL_USD / POS_QTY as the price proxy" or "default scope is all customers/markets unless the user specifies otherwise"). This eliminates the round-trip that GPT would otherwise require.
+### Observable Behavioral Differences (Tested)
 
-**Instruction Following & Context Depth:**
-- Anthropic models (especially Opus-class) are significantly better at following detailed `zoe_description` guidance, especially multi-paragraph instructions with conditional logic ("if X, use Y; if Z, use W"). They more reliably apply critical filters, use the correct fields, and respect negative guidance ("do NOT use field X").
-- GPT models may ignore guidance buried in long descriptions, relying instead on field names and basic type information. For workspaces using GPT models, **concise, top-loaded descriptions** work better than detailed multi-paragraph instructions.
+The following observations are based on structured testing: each model received the same questions against the same production data, with results compared across all behavioral dimensions.
 
-**SQL Complexity Ceiling:**
-- Anthropic models handle complex analytical patterns better: multi-CTE queries, window functions for running totals, period-over-period comparisons with date arithmetic, and nested aggregations.
-- GPT models may produce syntactically valid but logically incorrect SQL on complex queries — e.g., applying a window function at the wrong granularity or missing a partition clause.
+#### Autonomy (Most Important Initial Difference)
 
-**Richness of Output:**
-- Anthropic models tend to deliver richer responses: charts, data tables, applied filter documentation, key observations about trends, and proactive drill-down suggestions.
-- GPT models tend to deliver more structured, plan-oriented responses — describing what they will do rather than doing it immediately.
+How each model handles ambiguous questions (e.g., "top 5 products by volume" — SKU vs product line? POS Qty vs GSV?):
 
-**Join Path Selection:**
-- Anthropic models with stronger reasoning tend to select the correct join path when multiple options exist (identifier auto-discovery vs. topic-defined `sql_on`). They are also better at avoiding fan-out traps documented in view descriptions.
-- GPT models' join reasoning means the data model must be more explicit — fewer ambiguous join paths, more aggressive use of `hidden: true` on technical fields, and stronger guardrails in topic `zoe_description`.
+- **Opus 4.6:** Fully autonomous. Makes reasonable assumptions immediately and executes. Never asks clarifying questions. Delivers results, then offers to refine.
+- **Sonnet 4.6:** Semi-autonomous. Surfaces the ambiguity explicitly (e.g., "I'll interpret 'products' as distinct SKUs and 'volume' as POS Qty") but self-resolves without waiting for user confirmation. Proceeds to execute.
+- **Sonnet 4.5:** Fully autonomous. Executes immediately without surfacing or acknowledging ambiguity. Fastest to first result.
+- **GPT 5.1:** Mixed. May execute an initial query, but stops and asks clarifying questions when encountering complexity or errors. Adds round-trips to the conversation.
+
+**Impact on user experience:** For business users who want quick answers, autonomy delivers immediate value — users see data and can iterate. Confirmation-seeking adds round-trips, which slows time-to-insight and can frustrate non-technical users who may not know how to answer clarifying questions (e.g., "Do you want forecast units or GSV?").
+
+**Impact on data modeling:** With less autonomous models, the data model must pre-resolve more ambiguity — richer `zoe_description` guidance, more explicit `default_date` and `canon_date` settings, and clearer field naming — so the model doesn't need to ask.
+
+#### Error Recovery (Most Important Practical Difference)
+
+All four models were given questions where the underlying data contained null/zero values that would break naive queries (e.g., top-volume SKUs with $0.00 retail prices due to promotional items or internal transfers). How each model handled this:
+
+- **Opus 4.6:** Systematic investigation. Ran ~10 queries autonomously: initial query → detected null/zero data → ran diagnostic queries to understand why → explored alternative data paths → resolved the issue → delivered clean results. Discovered and worked through 3+ distinct errors (query failures, brand value mismatches, NULL quantities) without ever asking the user for help.
+- **Sonnet 4.6:** Self-correcting. Ran 3 queries: initial query → caught null/zero data mid-execution → ran diagnostic query → re-queried with exclusion filters → delivered clean results. Less thorough than Opus but caught the problem and fixed it autonomously.
+- **Sonnet 4.5:** Presents broken data first. Executed the query, received $0.00 prices and NaN quantities, presented them to the user, then explained why the data looked wrong. Offered to re-run with exclusion filters. The user sees bad data before seeing good data.
+- **GPT 5.1:** Stops on error. Executed the initial query, received broken results, then provided a structured explanation of why it couldn't answer (organized into sections: "Data pulled," "Issue in current data," "What I can't do reliably," "How we can tighten this up"). Most transparent methodology documentation, but no answer delivered. Asked the user 3 clarifying questions.
+
+**Key insight:** Error recovery is the strongest practical differentiator between models. The question isn't just "did it execute?" — it's "what happened when reality didn't match expectations?" Opus works through problems like a senior analyst. Sonnet 4.6 catches and fixes problems like a mid-level analyst. Sonnet 4.5 presents the problem and offers to try again. GPT describes the problem and asks what to do.
+
+**Data modeling implication:** For workspaces with messy data (null values, zero-price promotional items, inconsistent categorization), Opus and Sonnet 4.6 will navigate autonomously. Sonnet 4.5 and GPT will surface the problems to users, who may not understand the root cause. Richer `zoe_description` guidance about known data quality issues (e.g., "exclude records where retail_price = 0, as these are promotional/internal transfers") helps all models but is critical for Sonnet 4.5 and GPT.
+
+#### Domain Awareness
+
+- **Opus 4.6:** Actively discovers domain-specific context. In testing, it looked up the customer's 5-4-4 fiscal calendar boundaries (FY2025: Dec 29, 2024 → Jan 3, 2026) and used fiscal months for trending instead of calendar months. No other model did this.
+- **Sonnet 4.6:** Uses calendar dates but does not discover or apply fiscal calendar logic unless explicitly guided.
+- **Sonnet 4.5:** Uses calendar dates only.
+- **GPT 5.1:** Uses calendar dates only.
+
+**Data modeling implication:** For companies with fiscal calendars that differ from calendar months, Opus will often discover and apply the correct boundaries. For other models, document fiscal calendar rules in the system prompt or `zoe_description` (e.g., "This company uses a 5-4-4 fiscal calendar starting the last Sunday in December. Use dimension_group fiscal_year, fiscal_quarter, and fiscal_month for all time-based trending.").
+
+#### Proactive Interpretation
+
+Whether the model adds analytical context beyond the literal question asked:
+
+- **Opus 4.6:** Consistently provides per-product narratives, flags data quality anomalies, notes trends, and offers drill-down suggestions. Delivered the most complete analytical package.
+- **Sonnet 4.6:** Provides per-product narratives and flags anomalies (e.g., near-zero prices causing misleading percentage changes, mix shift vs. true price change). Consistent proactive interpretation.
+- **Sonnet 4.5:** Inconsistent. Sometimes flags anomalies, sometimes presents results without commentary. In one test, flagged $0 prices after presenting them; in another test, did not flag any anomalies.
+- **GPT 5.1:** Does not proactively interpret. Describes methodology and limitations but does not add analytical observations about the data. Most structured documentation of what it *tried* to do, but no insights about what the data *means*.
+
+#### Methodology Transparency
+
+- **GPT 5.1:** Highest transparency. Structures its response into explicit sections (data pulled, issues encountered, limitations, next steps). Documents formulas and calculation approaches. Users always know exactly what the model attempted and why it stopped.
+- **Sonnet 4.6:** Medium. Shows its reasoning as it works through problems, but embeds it in the flow of analysis rather than structuring it separately.
+- **Opus 4.6:** Medium-high. Comprehensive in its final delivery but doesn't always narrate intermediate steps.
+- **Sonnet 4.5:** Low. Executes and presents results with minimal explanation of approach.
+
+#### Analytical Capability (Comparable Across Models)
+
+When all models are given the same well-defined analytical task (e.g., computing price elasticity from POS data using log-log regression), they arrive at **equivalent analytical conclusions** — same regression coefficients, same directional interpretation, same business recommendation.
+
+The difference is in how they get there:
+- **Opus 4.6** autonomously chose the price proxy (retail USD / quantity), scoped to all markets, pulled 6 months of weekly data, ran the regression, and returned the elasticity estimate, projected impact, and caveats — all without asking the user anything.
+- **GPT 5.1** stopped to ask "What should I use as the price measure?" and "What market scope?" before executing anything. Once it received explicit answers, it produced an equally thorough analysis — arguably even more structured in presentation (numbered methodology sections, explicit formula documentation).
+
+**Key insight:** The capability gap between models is not in analytical depth — it's in the **autonomy to make reasonable assumptions and start working.** GPT needs the user to pre-resolve ambiguity; Opus resolves it autonomously and delivers results immediately. Sonnet 4.6 surfaces the ambiguity but self-resolves. Sonnet 4.5 skips the ambiguity entirely (which is fast but occasionally leads to wrong assumptions).
+
+### Complete Behavioral Comparison
+
+Summary of all observed behaviors across both structured tests:
+
+| Behavior | Sonnet 4.5 | Sonnet 4.6 | Opus 4.6 | GPT 5.1 |
+|---|---|---|---|---|
+| **Autonomy** | Executes immediately | Surfaces ambiguity, self-resolves | Executes immediately | Mixed — executes, then stops on errors |
+| **Error recovery** | Presents broken data, explains after | Self-corrects mid-execution (~3 queries) | Systematic investigation, self-corrects through 3+ errors (~10 queries) | Stops, explains failure, asks user |
+| **Domain awareness** | Calendar dates only | Calendar dates only | Discovers fiscal calendars, business hierarchies | Calendar dates only |
+| **Proactive interpretation** | Inconsistent | Consistent (anomaly flagging, per-product narratives) | Consistent (deepest analytical context) | None — methodology documentation only |
+| **Methodology transparency** | Low | Medium | Medium-high | Highest (structured sections) |
+| **Gets user to an answer** | Yes (may include broken data) | Yes (clean) | Yes (clean, most complete) | Often no — blocked on user input |
+| **Queries to resolve data issues** | 1 (presents as-is) | ~3 (detect, diagnose, fix) | ~10 (systematic exploration) | 1 (stops and reports) |
+| **Instruction adherence** | Moderate | Strong | Strongest | Moderate (ignores long descriptions) |
+| **SQL complexity ceiling** | Moderate | High | Highest | Moderate |
 
 ### Practical Implications for Data Model Design
 
-The key insight: **a well-built semantic layer should work across all supported models, but the margin for error varies by model capability.**
+The key insight: **a well-built semantic layer should work across all supported models, but the margin for error varies dramatically by model tier.**
 
 #### Design for the Lowest Common Denominator, Optimize for the Best
 
@@ -1326,48 +1387,62 @@ The key insight: **a well-built semantic layer should work across all supported 
    - `hidden: true` on all technical/internal fields
    - Explicit `sql_on` joins in topics for any non-obvious relationships
    - At least basic `description` on every view and key fields
+   - Document known data quality issues in `zoe_description` (null values, zero-price records, inconsistent categorization)
 
-2. **Stronger models unlock more from the semantic layer:**
-   - Multi-paragraph `zoe_description` with conditional logic is followed more reliably
-   - Complex system prompt rules (row limits, view selection guides, dialect-specific column avoidance) are adhered to more consistently
-   - Models with deeper reasoning can navigate identifier auto-discovery + topic joins simultaneously without confusion
+2. **Tier 1-2 models (Opus 4.6, Sonnet 4.6) unlock more from the semantic layer:**
+   - Multi-paragraph `zoe_description` with conditional logic is followed reliably
+   - Complex system prompt rules (row limits, view selection guides, dialect-specific column avoidance) are adhered to consistently
+   - These models can navigate identifier auto-discovery + topic joins simultaneously without confusion
    - Nuanced business logic in descriptions (e.g., "use field A for questions about X, but field B for questions about Y") works as intended
+   - Opus discovers domain context (fiscal calendars, business hierarchies) autonomously; Sonnet 4.6 follows it when documented
 
-3. **For GPT models or less capable models, compensate with stricter structure:**
+3. **Tier 3 model (Sonnet 4.5) needs data quality guardrails:**
+   - Executes fast but may present broken data if the semantic layer doesn't pre-filter known issues
+   - Add `always_filter` or `zoe_description` guidance to exclude known bad records (e.g., "IMPORTANT: Exclude records where retail_price = 0 — these are promotional/internal transfers, not real pricing data")
+   - Descriptions should be concise — Sonnet 4.5 doesn't always weigh long, conditional descriptions
+
+4. **Tier 4 model (GPT 5.1) needs the most explicit structure:**
    - Keep descriptions shorter and more direct — lead with the most critical instruction
    - Pre-resolve ambiguity that the model would otherwise ask the user about (e.g., specify the default unit of measure in `zoe_description`, set `default_date` on every view)
    - Prefer explicit topic `sql_on` over relying on identifier auto-discovery
    - Use `hidden: true` more aggressively to reduce the field space the model must reason over
    - Add more memories for common query patterns to provide explicit SQL examples
    - Consider simplifying join topologies (fewer hop chains, fewer many-to-many relationships)
+   - Document fiscal calendars, data quality exceptions, and default scopes explicitly — GPT will not discover these on its own
 
 #### Testing Across Models
 
 When validating data model changes:
-- **Test with at least two model families** if the workspace's users use multiple models
-- **Compare the generated SQL across models**, not just the results — a less capable model may produce correct results on simple queries but fail on edge cases
+- **Test with at least two model tiers** if the workspace's users use multiple models — ideally one Anthropic (Opus or Sonnet 4.6) and GPT
+- **Compare the generated SQL across models**, not just the results — a lower-tier model may produce correct results on simple queries but fail on edge cases
+- **Test with intentionally messy data** — null values, zero-price records, ambiguous field names — to validate error recovery behavior
 - **Document model-specific regressions** — if a query works on one model but fails on another, that's a signal the semantic layer needs to be more explicit (which helps all models)
+- **Save the generated SQL from Opus 4.6 as a baseline** — it consistently produces the most thorough SQL. Use it as the reference when evaluating other models' output.
 
 ### Model Selection Guidance for Customers
 
-**Zenlytic's recommendation:** Anthropic Claude Sonnet 4.5 as the minimum, Opus 4.6 as the ideal. GPT models are available but are not the recommended default.
+**Zenlytic's recommendation:** Opus 4.6 as the ideal choice for complex data models. Sonnet 4.5 as the minimum recommended baseline. Sonnet 4.6 as a strong middle option that balances speed with error recovery.
+
+> **Sonnet 4.6 note:** This model was recently released and shows very strong initial performance (Tier 2). Retest after a few weeks of production use to confirm behavioral stability before making it a primary recommendation. Early signs are positive — it may prove to be the best balance of speed, cost, and capability for most workspaces.
 
 When advising customers on model selection:
-- **Start with the Zenlytic recommendation.** Anthropic models consistently demonstrate stronger autonomous data exploration, richer output, and better instruction adherence — the behaviors that most impact Zoë's usefulness as a data analyst.
-- **If a customer requires GPT models**, account for the behavioral differences during data modeling: write shorter, more direct descriptions; pre-resolve ambiguity in field naming and `zoe_description`; add more memories for common query patterns; and expect the user experience to include more clarification round-trips.
-- **Recommend testing.** Have customers run their top 10-20 most common questions across available models and compare both results and SQL quality. This validates the recommendation against their specific data model and query patterns.
+- **For complex data models with messy data**, recommend Opus 4.6. Its autonomous error recovery and domain awareness mean users get answers even when the data has quality issues.
+- **For well-structured, clean data models**, Sonnet 4.5 or Sonnet 4.6 may be sufficient and faster/cheaper. If the semantic layer pre-resolves most ambiguities, the gap between tiers narrows.
+- **For workspaces using GPT models**, account for the behavioral differences during data modeling: write shorter, more direct descriptions; pre-resolve ambiguity in field naming and `zoe_description`; add more memories for common query patterns; document data quality issues explicitly; and expect the user experience to include more clarification round-trips.
+- **Recommend testing.** Have customers run their top 10-20 most common questions across available models and compare both results and SQL quality. Include at least one question that exercises messy data (nulls, edge cases) to test error recovery.
 - **Cost and latency trade-offs exist.** More capable models are generally slower and more expensive per query. For simple, well-structured data models with straightforward queries, a faster model may be equally effective and provide a better user experience.
 - **The data model quality is the dominant variable.** A well-built semantic layer with clear names, rich descriptions, and explicit joins will outperform a poorly-built one on any model. Model selection is a secondary optimization after the semantic layer is solid.
-- **Re-evaluate with new releases.** Model capabilities evolve rapidly. When new model versions are released by either provider, test them against the same benchmark questions before updating recommendations.
+- **Re-evaluate with new releases.** Model capabilities evolve rapidly. When new model versions are released by either provider, test them against the same benchmark questions before updating recommendations. Sonnet 4.6 specifically should be retested after its initial release period stabilizes.
 
 ### Impact on System Prompt and Description Strategy
 
 Because different models process instructions with different fidelity:
 
-- **System prompt instructions should be written for the least capable model** — short, direct, unambiguous. If a less capable model can follow it, a more capable model will too.
+- **System prompt instructions should be written for the least capable model** — short, direct, unambiguous. If GPT can follow it, all Anthropic models will too.
 - **Critical instructions should use forceful language regardless of model** — "IMPORTANT:", "you MUST", "NEVER" (see Part 15: Passive vs. Forceful Description Language). This costs nothing and dramatically improves compliance across all models.
-- **Avoid relying on implicit reasoning.** Don't assume the model will "figure out" that a join is dangerous — state it explicitly. Don't assume the model will infer the right date field — set `default_date` and `canon_date`.
-- **Memories become more valuable for GPT models.** Explicit query/response pairs give the model a concrete example to follow rather than requiring it to reason from first principles. This is especially important for reducing the confirmation-seeking behavior — a memory that shows "for this question type, here is the answer" reduces the model's inclination to ask clarifying questions.
+- **Document data quality issues proactively.** All models benefit from knowing about null values, zero-price records, and other data quirks — but Tier 3-4 models need this guidance to avoid presenting broken data.
+- **Avoid relying on implicit reasoning.** Don't assume the model will "figure out" that a join is dangerous — state it explicitly. Don't assume the model will infer the right date field — set `default_date` and `canon_date`. Don't assume the model will discover fiscal calendar boundaries — document them.
+- **Memories become more valuable for lower-tier models.** Explicit query/response pairs give the model a concrete example to follow rather than requiring it to reason from first principles. This is especially important for reducing GPT's confirmation-seeking behavior and Sonnet 4.5's tendency to present broken data — a memory that shows "for this question type, here is the correct answer with these exclusion filters" provides a template for correct behavior.
 
 ---
 
@@ -1402,6 +1477,7 @@ Because different models process instructions with different fidelity:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.8 | 2025-02-21 | Major Part 16 rewrite: replaced two-family (Anthropic vs GPT) framework with four-model tier framework (Opus 4.6, Sonnet 4.6, Sonnet 4.5, GPT 5.1) based on structured testing with identical questions. Added error recovery as the strongest practical differentiator, domain awareness (fiscal calendar discovery), proactive interpretation dimension, complete behavioral comparison table, tier-specific data modeling guidance, and Sonnet 4.6 early-release stability note. Evidence from two structured test scenarios across all four models. |
 | 1.7 | 2025-02-20 | Added Part 16: LLM Model Considerations — documents how different LLM backends (Anthropic Claude, OpenAI GPT) affect Zoë's SQL generation, instruction adherence, and join reasoning. Includes Zenlytic model recommendations (Sonnet 4.5 min, Opus 4.6 ideal), autonomy vs. confirmation-seeking behavioral patterns with production evidence, analytical capability parity example (price elasticity), data exploration differences, GPT-specific data modeling compensations, and impact on description/system prompt strategy. Obfuscated all customer-identifying references throughout KB. |
 | 1.6 | 2025-02-20 | Added CLAUDE.md exclusion rule to New Customer Setup: CLAUDE.md must never be committed to customer repos, .gitignore required, canonical copy lives in zoe-data-modeling-kb only. |
 | 1.5 | 2025-02-20 | Added 5 new Part 15 lessons from production customer engagement: test-before-remove workflow for multi-view topics, topics provide more than join context (field-usage guidance), passive vs. forceful description language, base view is implicit in topic view counts, SQL comparison is essential for validation. |
