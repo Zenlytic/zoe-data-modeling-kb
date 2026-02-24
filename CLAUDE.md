@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 1.8 | **Last Updated:** 2025-02-21
+**Version:** 2.2 | **Last Updated:** 2025-02-23
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -506,7 +506,7 @@ Zoë (Zenlytic's AI analyst) writes SQL to answer user questions, using the sema
 | **Join Logic** | LLM interprets topic definitions, relationships, and identifiers to construct joins |
 | **Permissions** | Row and column-based access controls are enforced by the system (see Permissions section below) |
 
-> **Note (Legacy):** An older mode called "Clarity" used deterministic SQL compilation from a query JSON intermediate step. This mode is being phased out. All guidance in this document is written for Zoë's current SQL-generation behavior.
+> **Clarity vs Exploratory:** Zoë operates in two distinct modes. **Exploratory mode** (the primary mode documented here) uses LLM semantic reasoning to generate SQL from the data model context. **Clarity mode** uses deterministic field resolution — it compiles a structured JSON query from the governed model without LLM interpretation. Both modes coexist; some customers are actively migrating from Clarity to Exploratory. New customers are set up in Exploratory mode. For Clarity→Exploratory migration methodology, see Part 19.
 
 ### How Zoë Sees Join Information
 
@@ -562,6 +562,8 @@ Use `description` at the view level and `zoe_description` at the field level and
 - **Relationships** — Model-level relationship definitions
 - **Synonyms** — Alternative names for natural language queries
 - **Searchable Fields** — Indexed categorical values for NLP discovery (see Part 14)
+- **Patterns** — Indexed historical warehouse queries that Zoë searches when the governed model alone isn't sufficient (see Part 17)
+- **Attachments** — User-provided files (CSV, images, PDFs) and structured query results attached to conversations (see Part 18)
 - **Access Controls** — Zoë cannot see or reference data that users don't have permission to view
 
 ### How Zoë Weighs Context Sources
@@ -574,6 +576,8 @@ Zoë sees all context sources simultaneously and uses them based on relevance to
 | **Structural Relationships** | Topics, joins, identifiers, topic descriptions |
 | **Field & View Descriptions** | `zoe_description` (if set) overrides `description` for Zoë |
 | **Memories** | Reinforced response patterns from previous queries |
+| **Patterns** | Historical query patterns from the warehouse that supplement the governed model |
+| **Attachments** | Ad-hoc files and query results provided by the user during a conversation |
 
 ### When to Use Each Context Type
 
@@ -584,6 +588,7 @@ Zoë sees all context sources simultaneously and uses them based on relevance to
 | **`description`** (view/field/topic level) | Business context explaining how data should be used | Applies to both users in the UI and Zoë |
 | **Memory** | Reinforcing desired response patterns for specific questions | User confirms Zoë's answer is correct and wants it repeated |
 | **Topic Structure** | Understanding data connections and analytical context | Need Zoë to understand which fields relate to each domain |
+| **Patterns** | Supplementing governed model with proven query patterns | Warehouse has rich query history; Snowflake connection available |
 
 **Key Guidance:**
 - Write **rich descriptions** with business context, not just technical definitions (e.g., "Total revenue expected from a customer over their entire relationship" vs bare field name)
@@ -641,8 +646,9 @@ This is the foundational test for every data model. If the naming, descriptions,
 
 **Configuration Options:**
 - Model Selection: Users switch between LLM models mid-conversation via dropdown (see Part 16 for how model choice affects SQL generation quality and data model design)
-- Input Methods: Voice transcription (`cmd + i` to toggle recording), file attachments (images, CSVs, PDFs — limit 5)
+- Input Methods: Voice transcription (`cmd + i` to toggle recording), file attachments via the `+` icon (images, CSVs, PDFs — up to 5 files per message, 25 MB each), and structured query attachments built from the data model (see Part 18)
 - Integration: Slack (@Zenlytic tagging required) and Microsoft Teams support
+- Patterns: When enabled, Zoë automatically searches indexed historical warehouse queries to supplement the governed model (see Part 17)
 
 ### Example Zoë-Optimized View with Join Warnings
 ```yaml
@@ -891,6 +897,23 @@ Groups control dashboard-level access:
 3. **Set dashboard permissions** per group via the Share button on each dashboard
 
 This two-tier approach (workspace groups + dashboard permissions) avoids reconfiguring membership for each dashboard.
+
+### Workspace Manager
+
+The Workspace Manager is a self-service admin interface for Organization Admins to create, manage, and provision workspaces across the organization.
+
+**Access:** Only **Organization Admins** can access. Workspace Admins manage users/settings within a single workspace only.
+
+**Creating a New Workspace:**
+1. **Name & SSO** — Name the workspace and optionally enable SSO User Provisioning (disabled by default; when enabled, SSO sign-ins are auto-added to the workspace)
+2. **Database Connections** — Copy connections from existing workspaces across the organization, or create new ones (auto-tested before saving)
+3. **GitHub Repository** — Link the data model repo. Options: Managed Repository (Zenlytic-created) or Connected Repository (existing repo via URL + branch). The GitHub repo must be configured before Zoë can be used in the workspace.
+
+**Managing Existing Workspaces:**
+- Toggle SSO User Provisioning on/off per workspace
+- Delete workspaces (deactivates but does not permanently destroy)
+
+**Relevance to data modeling:** The Workspace Manager is the admin prerequisite before any data model work begins. The GitHub repository setup determines which repo and branch the Data Model Editor (Part 10) operates on.
 
 ---
 
@@ -1248,6 +1271,98 @@ When evaluating whether a multi-view topic can be safely removed (because the jo
   4. **Table references** — Is Zoë querying the right tables?
 - **Save the baseline SQL** from the "with topic" test. Use it as a diff target for all subsequent tests.
 
+### Measure Discoverability — Keyword Conflicts Between Related Measures
+- **A measure can exist with the correct SQL formula and still be unfindable by Exploratory mode** if it lacks a `zoe_description` or if a related measure claims the natural-language keyword.
+- **Common pattern:** A workspace has both a dollar margin measure (`dsv_margin_usd`) and a percentage margin measure (`dsv_margin_percentage`). The percentage measure has `zoe_description: "When asked to display 'Margin' use this measure"` and `synonyms: [Margin]`. The dollar measure has no `zoe_description`. When a user asks "which customers contributed most to margin improvement," all exploratory models fail — they either find the percentage measure (wrong for dollar comparison) or can't find any margin measure at all.
+- **Fix:** Every measure that could be requested by name MUST have its own `zoe_description` with explicit keyword routing. For related measures (dollar vs percentage, gross vs net), the `zoe_description` must clearly distinguish when to use each one.
+- **Example fix pattern:**
+  ```yaml
+  - name: dsv_margin_usd
+    zoe_description: >
+      IMPORTANT: Use this measure for any question about margin in dollar terms,
+      margin improvement, margin contribution, or margin change between periods.
+      This is the dollar amount of margin. For margin as a percentage, use
+      dsv_margin_percentage instead.
+
+  - name: dsv_margin_percentage
+    zoe_description: >
+      Use this measure when asked about margin rate, margin percentage, or
+      margin %. For margin in dollar terms or margin change/improvement between
+      periods, use dsv_margin_usd instead.
+  ```
+- **Audit pattern:** For every cluster of related measures (revenue/cost/margin, gross/net, dollar/percentage), verify each measure has its own `zoe_description` with keyword routing that distinguishes it from its siblings.
+
+### Wide Fact Table Awareness — Exploratory Models Wander Unnecessarily
+- **When a single view contains all fields needed to answer a question** (dimensions, measures, filters, dates — all on one table), Exploratory models may still wander to dimension tables via joins, causing unnecessary complexity, wrong field selection, or outright failures.
+- **This was observed in production testing:** A billing view contained customer fields, product fields, region fields, fiscal period fields, cost fields, and sales measures — everything needed for questions about sales, margin, or customer analysis. Clarity mode (deterministic) correctly stayed on the single view with zero joins. All four Exploratory models attempted joins to dimension tables (e.g., `dim_customer` for country filtering instead of using the billing view's own `SOLDTO_CUST_CNTRY_DESC` field).
+- **Root cause:** The Exploratory LLM sees the question mentions "customer" or "country" and discovers a `dim_customer` view with matching concepts. Without explicit guidance, it follows the join path instead of recognizing that the fact table already has the needed fields.
+- **Fix:** Add explicit wide-table guidance to the view `description`:
+  ```yaml
+  description: |
+    This view contains all fields needed for sales billing analysis.
+    IMPORTANT: Do NOT join to external dimension tables for customer, product,
+    region, or date information. All customer fields (sold-to, ship-to, bill-to),
+    product hierarchies, regional breakdowns, and fiscal period fields are
+    already present on this table. Joining to dim_customer, dim_product, or
+    similar tables is unnecessary and will produce incorrect results.
+  ```
+- **Also reinforce in the topic `zoe_description`** with the same guidance, using forceful language.
+
+### Topic zoe_description — Procedural vs Declarative Guidance
+- **Topic `zoe_description` fields that read like step-by-step procedures** (e.g., "Step 1: Identify metrics. Step 2: Run a distinct query. Step 3: Run the final query.") may or may not be followed reliably by Exploratory models. These are instructions *about how to work*, not *about the data*.
+- **Declarative guidance about the data** (field routing, filter defaults, date interpretation rules, EMEA region definitions) is more reliably followed because it gives the model facts to apply rather than procedures to execute.
+- **Best practice:** Keep topic `zoe_description` focused on data-specific rules. Use the system prompt for behavioral/procedural instructions that apply workspace-wide. If the topic must include procedures, keep them concise and lead with the data rules.
+
+### View Description Alone Is Insufficient for Critical Data Quality Rules
+- **View-level `description` warnings are not reliably read by Exploratory models** when generating SQL. In production testing, a view `description` containing "CRITICAL: This table contains MULTIPLE archival snapshots... you MUST filter by ARCHIVAL_DTE" was ignored by all four models (Sonnet 4.5, Sonnet 4.6, Opus 4.6, GPT 5.1). All produced inflated totals (2.4M vs correct ~370K) because they summed across archival snapshots without filtering.
+- **Field-level `zoe_description` on the specific dimension fixed it immediately.** When the same CRITICAL guidance was moved to the `zoe_description` on `ARCHIVAL_DTE_FMTH_ID` — the field Zoë must use to apply the filter — all four models included the archival filter on the next run. The result flipped from 0-for-4 to 4-for-4.
+- **Why this happens:** View descriptions are read at topic/view selection time. By the time Zoë is writing the WHERE clause, it's looking at individual field metadata, not re-reading the view description. The `zoe_description` on the filter field is encountered at exactly the moment Zoë decides what to include in the query.
+- **Rule: For data quality rules that require a specific filter in the SQL, put the guidance on the dimension that implements the filter, not (only) on the view.** The view description provides background context; the field `zoe_description` drives action.
+- **Include the exact SQL pattern** in the `zoe_description` when possible. Instead of "filter to the latest archival date," write `AND ARCHIVAL_DTE_FMTH_ID = (SELECT MAX(ARCHIVAL_DTE_FMTH_ID) FROM table_name)`. Models follow concrete SQL patterns more reliably than abstract instructions.
+- **Still keep the view description warning** — it provides backup context and helps human readers. But don't rely on it as the sole mechanism for critical filter requirements.
+
+### Data Model Validation Test Suite
+When validating data model changes across models, use a structured test suite that covers distinct SQL generation capabilities. Each test type exercises a different failure mode:
+
+**1. Simple Aggregation with Critical Filters (Data Quality Test)**
+- Tests whether the model applies required filters (e.g., archival date deduplication, RPT_GRP exclusions, status filters)
+- Example: "What is the total FCST_QTY for Division 04, USA, for March 2026 from the Monthly Forecast History?"
+- What to check: Does the SQL include the mandatory filter? Is the result in the expected range?
+- Failure mode: Missing filter → inflated/duplicated results
+- This is the most important test — run it first on every model after any data model change
+
+**2. Cross-Table Comparison (Join + Filter Test)**
+- Tests whether the model correctly joins two related tables and applies consistent scoping
+- Example: "Compare the Current Demand Forecast with the Demand Forecast Monthly History for March 2026, USA, Division 04"
+- What to check: Does the model correctly scope the history table to the latest archival snapshot before comparing? Are the same filters applied to both tables?
+- Failure mode: Comparing a single snapshot to a sum of all snapshots → meaningless variance
+
+**3. Year-over-Year Growth (Fiscal Calendar + Aggregation Test)**
+- Tests fiscal calendar awareness, self-join or window function generation, and minimum threshold filtering
+- Example: "Top 10 retailers by YoY POS Qty growth for Craftsman in the last completed fiscal quarter vs same quarter last year, excluding retailers with fewer than 1,000 units in either quarter"
+- What to check: Does the model use fiscal periods (not calendar)? Does it apply the minimum threshold? Is the growth calculation correct?
+- Failure mode: Calendar dates instead of fiscal → wrong period boundaries; missing threshold → noisy results
+
+**4. Statistical / Analytical Python (Methodology Test)**
+- Tests whether the model chooses the correct statistical methodology and writes valid Python
+- Example: "For SKU CMCD700C1, determine the price elasticity over the last 6 months and predict the impact of a 10% price increase on POS Qty"
+- What to check: Does the model use log-log regression (correct) vs percentage-change regression (wrong)? Does it handle zero/null prices? What statistical library does it use?
+- Failure mode: Wrong methodology → wrong elasticity coefficient (e.g., -1.90 vs correct -3.04). This is the hardest test — only Tier 1-2 models consistently choose the right method.
+- **Key insight from production testing:** All four models arrive at equivalent analytical conclusions when the methodology is unambiguous (same regression coefficients, same directional interpretation). The divergence is in *methodology selection* — Sonnet 4.5 chose percentage-change linear regression (biased toward zero, lower R²) while Opus 4.6, Sonnet 4.6, and GPT 5.1 all chose log-log regression (textbook correct). The data model cannot fix methodology selection — this is a model capability difference.
+
+**5. Multi-Source Data Reconciliation (Source Selection Test)**
+- Tests whether the model chooses the right source table when multiple tables contain overlapping data
+- Example: "Top items in PSS SBU under Cub Cadet where 2026 forecast exceeds 2025 and 2024"
+- What to check: Does the model use the history table (which has all years) vs the snapshot table (which may only have current year)? Does it handle the source selection consistently?
+- Failure mode: Mixing sources (snapshot for one year, history for another) → incomparable numbers; using snapshot for historical years → missing data
+
+**Running the Suite:**
+- Run each test on at least two models (ideally one Anthropic + GPT, or Sonnet 4.5 + Opus for tier comparison)
+- Compare the generated SQL across models, not just results
+- Save baseline SQL from the first passing run — use it as diff target for all subsequent tests
+- Test #1 should be run after every data model push; tests #2-5 after significant structural changes
+- If a test fails on one model but passes on others, that's a data model enrichment opportunity (see Part 16 for tier-specific guidance)
+
 ---
 
 ## Part 16: LLM Model Considerations
@@ -1348,15 +1463,32 @@ Whether the model adds analytical context beyond the literal question asked:
 - **Opus 4.6:** Medium-high. Comprehensive in its final delivery but doesn't always narrate intermediate steps.
 - **Sonnet 4.5:** Low. Executes and presents results with minimal explanation of approach.
 
-#### Analytical Capability (Comparable Across Models)
+#### Statistical & Analytical Capability
 
-When all models are given the same well-defined analytical task (e.g., computing price elasticity from POS data using log-log regression), they arrive at **equivalent analytical conclusions** — same regression coefficients, same directional interpretation, same business recommendation.
+When models are given analytical tasks requiring statistical methodology (e.g., computing price elasticity from POS data using log-log regression), the **execution willingness** gap is the dominant differentiator — not the analytical methodology itself. Models that execute autonomously choose the same correct methodology and arrive at equivalent conclusions.
 
-The difference is in how they get there:
-- **Opus 4.6** autonomously chose the price proxy (retail USD / quantity), scoped to all markets, pulled 6 months of weekly data, ran the regression, and returned the elasticity estimate, projected impact, and caveats — all without asking the user anything.
-- **GPT 5.1** stopped to ask "What should I use as the price measure?" and "What market scope?" before executing anything. Once it received explicit answers, it produced an equally thorough analysis — arguably even more structured in presentation (numbered methodology sections, explicit formula documentation).
+**Execution split on statistical tasks:**
 
-**Key insight:** The capability gap between models is not in analytical depth — it's in the **autonomy to make reasonable assumptions and start working.** GPT needs the user to pre-resolve ambiguity; Opus resolves it autonomously and delivers results immediately. Sonnet 4.6 surfaces the ambiguity but self-resolves. Sonnet 4.5 skips the ambiguity entirely (which is fast but occasionally leads to wrong assumptions).
+| Model | Executes Autonomously? | Behavior |
+|-------|----------------------|----------|
+| **Opus 4.6** | ✅ Yes | Chooses price proxy, scopes data, runs regression, returns elasticity + impact + caveats — no user input needed |
+| **Sonnet 4.6** | ✅ Yes | Surfaces interpretation choices (e.g., "I'll use retail USD as the price proxy"), self-resolves, executes fully |
+| **Sonnet 4.5** | ❌ No | Stops and asks clarifying questions (e.g., "What price measure should I use?") instead of making reasonable assumptions |
+| **GPT 5.1** | ❌ No | Stops and asks for explicit inputs before executing — once provided, produces equally thorough analysis |
+
+**Methodology agreement (when models execute):** Models that execute autonomously consistently choose log-log regression (the textbook-correct approach for price elasticity) and arrive at identical coefficients. In production testing, Opus 4.6 and Sonnet 4.6 both computed elasticity of -2.62 with R²=0.80 on the same SKU — validating that when the execution barrier is cleared, analytical methodology is equivalent.
+
+**Baseline scoping divergence:** Even when models agree on elasticity coefficients, they may diverge on how to define "current price" — the baseline from which the price change is applied. In production testing, Opus 4.6 used $57.93 while Sonnet 4.6 used $82.35 as the baseline for the same SKU. This produced materially different demand impact projections (-40.7% vs -28.7%) despite identical elasticity. This divergence is a **data model gap**, not a model capability gap — the semantic layer lacks a definition for how to compute the current/baseline price (e.g., most recent week, trailing average, list price). Adding a `zoe_description` to the retail price dimension with an explicit baseline definition (e.g., "current price = most recent week's average retail price") would resolve this.
+
+**Key insight:** The capability gap between models on statistical tasks is not in analytical depth — it's in the **autonomy to make reasonable assumptions and start working.** Tier 1-2 models (Opus, Sonnet 4.6) execute immediately; Tier 3-4 models (Sonnet 4.5, GPT 5.1) stop and ask. The data model can partially compensate for this by pre-resolving common ambiguities in `zoe_description` (price proxy definitions, default scoping, baseline computation methods), which reduces the number of assumptions the model needs to make autonomously.
+
+**Data modeling implication for statistical tasks:** If the workspace's users frequently ask analytical questions (elasticity, forecasting, trend decomposition), pre-document the key parameters in `zoe_description`:
+- Which field represents "price" (and how to compute unit price if it's not stored directly)
+- What time window to use by default (e.g., "last 6 months of weekly data")
+- How to define "current" or "baseline" values (most recent period, trailing average, etc.)
+- Which records to exclude (zero-price promotional items, internal transfers)
+
+This guidance benefits all models but is critical for Tier 3-4 models, which will otherwise stop and ask the user to resolve these ambiguities.
 
 ### Complete Behavioral Comparison
 
@@ -1371,6 +1503,7 @@ Summary of all observed behaviors across both structured tests:
 | **Methodology transparency** | Low | Medium | Medium-high | Highest (structured sections) |
 | **Gets user to an answer** | Yes (may include broken data) | Yes (clean) | Yes (clean, most complete) | Often no — blocked on user input |
 | **Queries to resolve data issues** | 1 (presents as-is) | ~3 (detect, diagnose, fix) | ~10 (systematic exploration) | 1 (stops and reports) |
+| **Statistical task execution** | Stops, asks questions | Executes autonomously | Executes autonomously | Stops, asks for inputs |
 | **Instruction adherence** | Moderate | Strong | Strongest | Moderate (ignores long descriptions) |
 | **SQL complexity ceiling** | Moderate | High | Highest | Moderate |
 
@@ -1446,6 +1579,177 @@ Because different models process instructions with different fidelity:
 
 ---
 
+## Part 17: Patterns (Query History Indexing)
+
+Patterns is a beta feature that indexes a team's historical analytical queries from the data warehouse, making them available to Zoë as supplemental context beyond the governed data model.
+
+### How It Works
+
+**Sync Phase:** Zenlytic connects to the data warehouse and extracts recent analytical queries. These are normalized, deduplicated, and indexed using semantic embeddings for meaning-based searching (not keyword matching).
+
+**Search Phase:** When Zoë cannot fully answer a question using only the governed data model fields, she automatically searches indexed patterns, selects the most relevant matches, adapts them to the current question, and uses them to generate SQL. Zoë decides when to invoke Patterns without user prompting.
+
+### Setup
+
+**Settings → External Context → Query History tab:**
+1. View workspace connections in a table
+2. Toggle on desired connections as Patterns sources
+3. Click **Sync** to initiate the first sync
+4. Automatic syncs run every 24 hours thereafter
+
+**Prerequisite:** The connection role requires access to `ACCOUNT_USAGE` in Snowflake.
+
+### What Gets Indexed
+Only analytical queries (SELECT and WITH statements referencing data model tables) are indexed. Excluded:
+- DDL/DML operations
+- ETL service account queries
+- System schema queries
+- Staging/temporary table queries
+- Trivial queries
+- Queries not referencing model tables
+
+**Capacity:** Up to 10,000 patterns per workspace during beta. Oldest and least-frequently-used patterns are auto-pruned when capacity is exceeded.
+
+### Visibility in Chat
+Pattern usage appears as an expandable tool labeled "Searching for [topic] queries and definitions." The expanded view shows search keywords, returned patterns, and plain-language query descriptions.
+
+### Limitations
+- **Snowflake only** during beta
+- Effectiveness depends on existing query coverage — new workspaces with no query history won't benefit
+- Access-controlled: users only see patterns they have permissions for
+- 10,000-pattern workspace capacity during beta
+
+### Data Modeling Implications
+- Patterns supplement but do not replace the governed semantic layer. A well-built data model remains the primary context source.
+- Patterns can help bridge gaps during Clarity→Exploratory migrations — historical Clarity-generated queries become patterns that guide Exploratory mode.
+- If Zoë consistently relies on patterns instead of governed fields, that signals the semantic layer is missing descriptions, measures, or field routing guidance that should be added.
+- Audit patterns periodically: old query patterns may reference renamed columns or deprecated tables, potentially misleading Zoë (similar to the poisoned memories problem in Part 15).
+
+---
+
+## Part 18: Zoë Attachments
+
+Attachments allow users to integrate external files and structured data queries into Zoë conversations, grounding analysis in specific, verified data sources.
+
+### File Attachments
+Access via the **+** icon in the chat input. Supported formats: CSV, images, PDFs, and other common file types.
+
+**Limits:** Up to 5 files per message, 25 MB each.
+
+**How Zoë uses them:** Zoë reads file contents, infers schema (for structured data), and treats the data as contextual information for subsequent analysis. She can chart data, compute summary statistics, identify trends, and generate visualizations appropriate to the data shape.
+
+**Citations:** Zoë provides inline citations that link specific narrative values back to source data rows, providing transparency into calculations.
+
+### Query Attachments
+Users can build structured queries by selecting metrics and applying slices/filters from the data model. In Exploratory mode, users can also write raw SQL. The "New Explore" button creates a new chat with a pre-loaded blank query for immediate querying.
+
+### Data Modeling Implications
+- Attachments are a user-initiated input — they don't affect how the semantic layer is built
+- When users frequently attach CSVs to supplement Zoë answers, it may signal that the governed data model is missing measures or dimensions that should be added
+- Query attachments use the governed data model, so field quality (descriptions, searchability, synonyms) directly affects the query-building experience
+
+---
+
+## Part 19: Clarity vs Exploratory Modes & Migration
+
+### Mode Comparison
+
+Zoë operates in two fundamentally different modes. The distinction is about the **resolution mechanism**, not the LLM model. The same underlying LLM (e.g., GPT-5.1) produces completely different results depending on which mode is active.
+
+| Aspect | Clarity Mode | Exploratory Mode |
+|--------|-------------|-----------------|
+| **Resolution** | Deterministic field compilation from governed model | LLM semantic reasoning over data model context |
+| **Output** | Structured JSON query → compiled SQL | Raw SQL generated directly by the LLM |
+| **Field discovery** | Precise — maps to exact governed fields | Probabilistic — LLM interprets field names, descriptions, synonyms |
+| **Join behavior** | Uses only defined topic joins | May follow identifier chains, foreign keys, or relationships beyond the topic |
+| **Sensitivity to descriptions** | Low — descriptions are metadata, not instructions | High — descriptions, zoe_descriptions, and system prompts directly guide SQL generation |
+| **Error mode** | Field-not-found errors if governed model is incomplete | Plausible but wrong SQL if semantic layer is ambiguous |
+
+### Why Both Modes Exist
+- **Clarity** excels when the governed model is comprehensive and well-structured. It never hallucinates fields or wanders to wrong tables. But it's rigid — it can only use what's explicitly defined.
+- **Exploratory** excels at handling novel questions, creating ad-hoc calculations, and reasoning through complex multi-step analysis. But it depends heavily on the quality of the semantic layer to find the right fields and avoid unnecessary joins.
+- **New customers** are set up in Exploratory mode going forward.
+- **Existing customers** may be on Clarity and need migration to Exploratory.
+
+### Clarity as a Diagnostic Tool for Exploratory
+
+When Exploratory mode produces wrong results for a question that Clarity answers correctly, the Clarity output reveals exactly what the semantic layer is missing. This is the core diagnostic workflow:
+
+1. **Run the question in Clarity** — Examine the structured JSON query output. Note which fields, filters, and calculations Clarity used.
+2. **Run the same question in Exploratory** — Examine the generated SQL. Compare the table references, WHERE clause, JOINs, and field selections.
+3. **Identify the gaps** — The difference between the Clarity JSON and the Exploratory SQL reveals what the Exploratory LLM couldn't find or got wrong. Common gaps:
+   - **Field routing:** Clarity mapped to the correct field; Exploratory used a wrong field or joined to a dimension table unnecessarily
+   - **Filter values:** Clarity applied the correct filter value; Exploratory used a different value or missed the filter entirely
+   - **Date interpretation:** Clarity used fiscal periods; Exploratory used calendar dates
+   - **Measure selection:** Clarity used the right measure; Exploratory couldn't find it or used a related but wrong one
+4. **Enrich the semantic layer** — For each gap, add the appropriate `zoe_description`, `synonyms`, `searchable: true`, or view `description` guidance
+5. **Re-test in Exploratory** — Run the same question again and compare SQL to the Clarity baseline
+
+### Clarity→Exploratory Migration Workflow
+
+For customers transitioning from Clarity to Exploratory:
+
+**Step 1: Inventory the Clarity surface area**
+- Identify the top questions users ask (from usage logs, dashboards, or customer interviews)
+- Run each in Clarity and save the JSON output as baselines
+
+**Step 2: Test each question in Exploratory**
+- Run the same questions across at least one Anthropic model (preferably Opus 4.6 or Sonnet 4.6) and note failures
+- For each failure, use the Clarity JSON to diagnose the gap (see diagnostic workflow above)
+
+**Step 3: Enrich the semantic layer iteratively**
+- Prioritize by impact: fix the most commonly asked questions first
+- Common enrichments needed:
+  - Add `zoe_description` to measures that exist but are undiscoverable (see Part 15: Measure Discoverability)
+  - Add wide-table guidance to view `description` to prevent unnecessary joins (see Part 15: Wide Fact Table Awareness)
+  - Add `searchable: true` and `synonyms` to filter dimensions
+  - Add region/geography definitions to topic `zoe_description` or system prompt
+  - Add fiscal calendar rules to system prompt or topic `zoe_description`
+  - Add explicit RPT_GRP or standard exclusion filter guidance
+
+**Step 4: Re-test and iterate**
+- After each batch of enrichments, re-test the affected questions in Exploratory
+- Compare generated SQL to the Clarity baselines (not just results — see Part 15: SQL Comparison)
+- Iterate until Exploratory matches or exceeds Clarity for the top question set
+
+**Step 5: Switch production mode**
+- Once the top question set passes in Exploratory, switch the workspace
+- Monitor user feedback and Zoë chat logs for new failure patterns
+- Continue enriching the semantic layer as new question types emerge
+
+### Key Patterns Observed During Migration Testing
+
+These patterns were observed during structured testing on a production workspace being migrated from Clarity to Exploratory. Four identical questions were run across four Exploratory models (Opus 4.6, Sonnet 4.6, Sonnet 4.5, GPT 5.1) and compared to Clarity mode using GPT 5.1:
+
+**Pattern 1: Clarity stays on one table; Exploratory wanders**
+- All Clarity queries used the billing view as a single table with zero joins
+- Exploratory models attempted joins to dimension tables (dim_customer for country, dim_product for SKU details) that were unnecessary because the fact table already contained those fields
+- Fix: Wide fact table guidance in view description (see Part 15)
+
+**Pattern 2: Existing measures are invisible without zoe_description**
+- A margin measure existed with the correct SQL formula but no `zoe_description`
+- A related percentage margin measure claimed the "Margin" keyword in its `zoe_description` and synonyms
+- All four Exploratory models failed to compute margin in dollar terms; Clarity succeeded using the raw columns directly
+- Fix: Add `zoe_description` to every measure that could be requested by name (see Part 15: Measure Discoverability)
+
+**Pattern 3: Region/geography resolution differs between modes**
+- Clarity correctly mapped "EMEA" to a LIKE filter on the region description field (e.g., `ENTITY_LEVE7_LNDESC LIKE '%Europe%'`)
+- Exploratory models either couldn't resolve "EMEA" or used the wrong field (dim_customer country key vs. the billing view's own region field)
+- Fix: Define region groupings explicitly in topic `zoe_description` or system prompt (e.g., "EMEA = all ENTITY_LEVE7_LNDESC values containing Europe, Middle East, or Africa")
+
+**Pattern 4: Fiscal vs calendar date confusion**
+- Clarity correctly used fiscal period fields (FYR_ID, FQTR_ID, FMTH_ID)
+- Exploratory models defaulted to calendar dates unless the topic `zoe_description` or system prompt explicitly specified fiscal calendar usage
+- Fix: Document fiscal calendar rules and field mappings prominently
+
+### Migration Is Not All-or-Nothing
+- Migration can be incremental — enrich the semantic layer progressively, testing questions as you go
+- Start with the most common question types and expand from there
+- The semantic layer will continue to be refined as users ask new types of questions in Exploratory mode
+- Patterns (Part 17) can help bridge the gap during migration — historical Clarity-generated queries become indexed patterns that guide Exploratory mode
+
+---
+
 ## Documentation Sources
 
 ### Data Modeling
@@ -1464,12 +1768,15 @@ Because different models process instructions with different fidelity:
 - [Zenlytic Docs - Entity Drills](https://docs.zenlytic.com/tips-and-tricks/entity-drills)
 - [Zenlytic Docs - Time Metrics](https://docs.zenlytic.com/tips-and-tricks/time-metrics)
 - [Zenlytic Docs - Data Indexing](https://docs.zenlytic.com/tips-and-tricks/data-indexing)
+- [Zenlytic Docs - Patterns](https://docs.zenlytic.com/zenlytic-ui/patterns)
+- [Zenlytic Docs - Attachments](https://docs.zenlytic.com/zenlytic-ui/attachments)
 
 ### UI & Administration
 - [Zenlytic Docs - Data Model Editor](https://docs.zenlytic.com/zenlytic-ui/data_model_editor)
 - [Zenlytic Docs - User Attributes](https://docs.zenlytic.com/zenlytic-ui/user_attributes)
 - [Zenlytic Docs - User Roles](https://docs.zenlytic.com/zenlytic-ui/user_roles)
 - [Zenlytic Docs - Workspace Groups & Permissions](https://docs.zenlytic.com/zenlytic-ui/workspace_groups_and_permissions)
+- [Zenlytic Docs - Workspace Manager](https://docs.zenlytic.com/zenlytic-ui/workspace-manager)
 
 ---
 
@@ -1477,6 +1784,9 @@ Because different models process instructions with different fidelity:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.2 | 2025-02-23 | Rewrote Part 16 "Analytical Capability" section → "Statistical & Analytical Capability" with production evidence from price elasticity testing across all 4 models. Documents execution willingness as the dominant differentiator (Tier 1-2 execute autonomously, Tier 3-4 stop and ask), methodology agreement when models execute (identical log-log regression, same coefficients), baseline price scoping divergence as a data model gap (not model capability), and data modeling implications for statistical tasks (pre-document price proxies, time windows, baseline definitions in `zoe_description`). Added "Statistical task execution" row to Complete Behavioral Comparison table. |
+| 2.1 | 2025-02-23 | Added 2 new Part 15 lessons from production testing: (1) View description alone is insufficient for critical data quality rules — field-level `zoe_description` on the filter dimension is required (proven with 0-for-4 → 4-for-4 archival snapshot fix across all models); (2) Data Model Validation Test Suite — 5-test structured framework covering simple aggregation with critical filters, cross-table comparison, YoY fiscal growth, statistical/analytical Python methodology, and multi-source data reconciliation, with specific failure modes and what to check for each. |
+| 2.0 | 2025-02-23 | Structural expansion: Added Part 17 (Patterns — query history indexing), Part 18 (Zoë Attachments), Part 19 (Clarity vs Exploratory Modes & Migration — mode comparison, Clarity as diagnostic tool, 5-step migration workflow, key patterns from production testing). Corrected Clarity mode framing from "being phased out" to coexisting mode. Added Workspace Manager to Part 11. Added 3 new Part 15 lessons from production migration testing: measure discoverability keyword conflicts, wide fact table awareness, topic zoe_description procedural vs declarative guidance. Updated Part 7 context sources and weighting tables to include Patterns and Attachments. Added 3 new documentation source URLs. |
 | 1.8 | 2025-02-21 | Major Part 16 rewrite: replaced two-family (Anthropic vs GPT) framework with four-model tier framework (Opus 4.6, Sonnet 4.6, Sonnet 4.5, GPT 5.1) based on structured testing with identical questions. Added error recovery as the strongest practical differentiator, domain awareness (fiscal calendar discovery), proactive interpretation dimension, complete behavioral comparison table, tier-specific data modeling guidance, and Sonnet 4.6 early-release stability note. Evidence from two structured test scenarios across all four models. |
 | 1.7 | 2025-02-20 | Added Part 16: LLM Model Considerations — documents how different LLM backends (Anthropic Claude, OpenAI GPT) affect Zoë's SQL generation, instruction adherence, and join reasoning. Includes Zenlytic model recommendations (Sonnet 4.5 min, Opus 4.6 ideal), autonomy vs. confirmation-seeking behavioral patterns with production evidence, analytical capability parity example (price elasticity), data exploration differences, GPT-specific data modeling compensations, and impact on description/system prompt strategy. Obfuscated all customer-identifying references throughout KB. |
 | 1.6 | 2025-02-20 | Added CLAUDE.md exclusion rule to New Customer Setup: CLAUDE.md must never be committed to customer repos, .gitignore required, canonical copy lives in zoe-data-modeling-kb only. |
