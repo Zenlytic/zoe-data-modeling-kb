@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 2.2 | **Last Updated:** 2025-02-23
+**Version:** 2.3 | **Last Updated:** 2025-02-24
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -305,7 +305,7 @@ Measures represent aggregations/calculations.
 |------|-------------|-------|
 | `sum` | Sum values | Basic aggregation |
 | `average` | Calculate mean | Basic aggregation |
-| `count` | Count rows | Basic aggregation |
+| `count` | Count rows | Basic aggregation. **Cannot have `filters` unless `sql` references a specific column** (see note below) |
 | `count_distinct` | Count unique values | Basic aggregation |
 | `max` | Maximum value | Basic aggregation |
 | `min` | Minimum value | Basic aggregation |
@@ -314,6 +314,9 @@ Measures represent aggregations/calculations.
 | `average_distinct` | Average unique values | Requires `sql_distinct_key` |
 | `cumulative` | Aggregate over time | Requires `measure` property |
 | `number` | Static/calculated value | No aggregation |
+
+### Count Measure Filter Constraint
+**Zenlytic does NOT support `filters` on a `count` measure that doesn't reference a specific column in its `sql` property.** If you need a filtered count, the `sql` must reference a column (e.g., `sql: ${TABLE}.id`), not just `sql: 1` or omit `sql` entirely. This is a platform constraint, not a modeling choice.
 
 ### Distinct Aggregations (Prevent Double-Counting)
 ```yaml
@@ -1363,6 +1366,29 @@ When validating data model changes across models, use a structured test suite th
 - Test #1 should be run after every data model push; tests #2-5 after significant structural changes
 - If a test fails on one model but passes on others, that's a data model enrichment opportunity (see Part 16 for tier-specific guidance)
 
+### Orphaned Views Cause Zoë Misrouting
+- **When removing dead domains, deleting topics and/or models without deleting their associated views leaves orphans that Zoë actively routes to.** In a production engagement, all topics and models for two dead domains (Orders, PoC/Demo) were removed, but the views were left in place. Zoë routed the first test question to a dead PoC view (`POC_CWYD.W_FIN_PRFTBLTY_PERFORMANCE_F`) instead of the active fact table — because the view was still visible and looked relevant.
+- **Topics, models, and views form a three-layer stack.** Removing one or two layers without the third creates orphans that confuse Zoë. When cleaning up a workspace, always audit all three layers together.
+- **Audit pattern:** For each view, check that its `model_name` references a model that (a) exists and (b) has a working database connection. For each model, check that it has at least one view with accessible data. Flag any mismatches as orphans.
+- **In dev branches, prefer full removal of dead domains over hiding.** `hidden: true` still leaves artifacts that Zoë evaluates on every query. For dev branches focused on exploratory mode testing, removing all artifacts for domains without data produces a cleaner environment. In production branches, hiding may be appropriate if the domain is expected to come online soon.
+
+### Join Guidance in View Descriptions Can Replace Topics in Exploratory Mode
+- **For exploratory mode, explicit join instructions in a fact table's view `description` can substitute for topic `sql_on` definitions.** Write the join as: table name, ON condition with both column names. Example: `JOIN to PNL.DIM_APRC_MAPPING ON FK_HK_APRC_PRODUCT_ID = PK_HK_PRODUCT_CD`. This removes the topic abstraction layer entirely.
+- **This approach is less reliable than structured topic joins for non-obvious join keys** (where column names don't match across tables). The topic `sql_on` is unambiguous; a description-based join requires the LLM to parse and apply the instruction correctly every time.
+- **Always test with a question that forces the join before committing to this approach.** Run a question that requires cross-table data (e.g., "top customers by sales" which needs a customer hierarchy join). If Zoë can't follow the description-based join, add the topic back.
+- **This is a case-by-case decision, not a blanket recommendation.** Evaluate per workspace based on join complexity, column name clarity, and test results.
+
+### Don't Assume Measures Are Needed — Flag Compound Calculations for Customer Clarification
+- **In exploratory mode, Zoë can improvise simple aggregations (SUM, COUNT, AVG) directly from dimension columns typed as `number`.** Don't preemptively create governed measures for every numeric field — this was confirmed in production testing where Zoë correctly improvised `SUM(SALES_GROUP_CURR)` and `SUM(OP_GROUP_CURR)` without any governed measures.
+- **The risk area is calculated ratio measures** (e.g., profit margin = operating profit ÷ sales) where multiple valid numerators or denominators exist. For example, a P&L fact table may have `sales_group_curr`, `trade_sales_group_curr`, and `eaton_sale_group_curr` — Zoë must choose which denominator to use for "margin." Without guidance, different models or different runs may choose differently.
+- **Don't create governed measures proactively.** Instead, flag compound calculations for customer clarification — ask the business users how they define the calculation before creating a governed measure. Only create a measure when the customer specifies a formula they want standardized.
+- **Alternatives to governed measures:** Memories (save a correct Zoë response that used the right formula), view `description` (document the P&L waterfall and which fields map to which concepts), and `zoe_description` on specific fields (e.g., "use this field as the denominator for margin calculations").
+
+### Dead Domain Cleanup — Audit All Three Layers Together
+- **Workspaces accumulate dead domains** — schemas with no data, connections with no access, PoC/demo tables left over from onboarding. These create noise that degrades Zoë's routing accuracy and increases query evaluation time.
+- **Cleanup sequence:** (1) Identify which domains have working data (run `SELECT * LIMIT 5` against key tables). (2) For dead domains, flag all three layers — topics, models, AND views — that reference them. (3) In dev branches, remove all artifacts. In production branches, hide them if the domain is expected to come online.
+- **Multiple models pointing to the same connection with no additional configuration** (no relationships, no week_start_day, no timezone) are redundant. If all models use the same connection string and have no model-specific settings, consolidate to the one model that the active views reference.
+
 ---
 
 ## Part 16: LLM Model Considerations
@@ -1784,6 +1810,7 @@ These patterns were observed during structured testing on a production workspace
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.3 | 2025-02-24 | Added 4 new Part 15 lessons from Eaton workspace migration: (1) Orphaned views cause Zoë misrouting — deleting topics/models without views leaves decoys that Zoë routes to instead of active tables; (2) Join guidance in view descriptions can replace topics in exploratory mode — case-by-case, test before committing; (3) Don't assume measures are needed — Zoë improvises simple aggregations, only flag compound ratio calculations for customer clarification; (4) Dead domain cleanup — audit all three layers (topics, models, views) together, consolidate redundant models. Added platform constraint to Part 4c: Zenlytic does not support filters on count measures that don't reference a specific column. |
 | 2.2 | 2025-02-23 | Rewrote Part 16 "Analytical Capability" section → "Statistical & Analytical Capability" with production evidence from price elasticity testing across all 4 models. Documents execution willingness as the dominant differentiator (Tier 1-2 execute autonomously, Tier 3-4 stop and ask), methodology agreement when models execute (identical log-log regression, same coefficients), baseline price scoping divergence as a data model gap (not model capability), and data modeling implications for statistical tasks (pre-document price proxies, time windows, baseline definitions in `zoe_description`). Added "Statistical task execution" row to Complete Behavioral Comparison table. |
 | 2.1 | 2025-02-23 | Added 2 new Part 15 lessons from production testing: (1) View description alone is insufficient for critical data quality rules — field-level `zoe_description` on the filter dimension is required (proven with 0-for-4 → 4-for-4 archival snapshot fix across all models); (2) Data Model Validation Test Suite — 5-test structured framework covering simple aggregation with critical filters, cross-table comparison, YoY fiscal growth, statistical/analytical Python methodology, and multi-source data reconciliation, with specific failure modes and what to check for each. |
 | 2.0 | 2025-02-23 | Structural expansion: Added Part 17 (Patterns — query history indexing), Part 18 (Zoë Attachments), Part 19 (Clarity vs Exploratory Modes & Migration — mode comparison, Clarity as diagnostic tool, 5-step migration workflow, key patterns from production testing). Corrected Clarity mode framing from "being phased out" to coexisting mode. Added Workspace Manager to Part 11. Added 3 new Part 15 lessons from production migration testing: measure discoverability keyword conflicts, wide fact table awareness, topic zoe_description procedural vs declarative guidance. Updated Part 7 context sources and weighting tables to include Patterns and Attachments. Added 3 new documentation source URLs. |
