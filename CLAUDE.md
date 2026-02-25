@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 2.3 | **Last Updated:** 2025-02-24
+**Version:** 2.4 | **Last Updated:** 2025-02-25
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -696,22 +696,22 @@ connection: my_connection
 
 # Model-level relationships provide join context to ZoE alongside identifiers and topics
 relationships:
-  - name: orders_to_customers
-    from_view: orders
-    to_view: customers
-    type: many_to_one
+  - from_table: orders
+    join_table: customers
+    join_type: left_outer
+    relationship: many_to_one
     sql_on: ${orders.customer_id} = ${customers.customer_id}
 
-  - name: orders_to_order_lines
-    from_view: orders
-    to_view: order_lines
-    type: one_to_many
-    sql_on: ${orders.order_id} = ${order_lines.order_id}
+  - from_table: order_lines
+    join_table: orders
+    join_type: left_outer
+    relationship: many_to_one
+    sql_on: ${order_lines.order_id} = ${orders.order_id}
 
-  - name: order_lines_to_products
-    from_view: order_lines
-    to_view: products
-    type: many_to_one
+  - from_table: order_lines
+    join_table: products
+    join_type: left_outer
+    relationship: many_to_one
     sql_on: ${order_lines.product_id} = ${products.product_id}
 ```
 
@@ -1810,6 +1810,7 @@ These patterns were observed during structured testing on a production workspace
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.4 | 2025-02-25 | Corrected model-level relationships schema in Part 7 to match CTO canonical spec: properties are `from_table`, `join_table`, `join_type`, `relationship`, `sql_on` (no `name` property). Previous versions incorrectly used `from_view`/`to_view`/`type`/`name`. Validated via SBD Production workspace topic-to-relationships migration: migrated 3 topics (commercial_pos, BOM, USMCA) to 4 model-level relationships with view description enrichment. All tests passed on Opus 4.6 — POS fiscal calendar join ($19.8M), cross-table CTE aggregation (84.7% component-to-full cost ratio), HTS code mappings (1.6M). |
 | 2.3 | 2025-02-24 | Added 4 new Part 15 lessons from Eaton workspace migration: (1) Orphaned views cause Zoë misrouting — deleting topics/models without views leaves decoys that Zoë routes to instead of active tables; (2) Join guidance in view descriptions can replace topics in exploratory mode — case-by-case, test before committing; (3) Don't assume measures are needed — Zoë improvises simple aggregations, only flag compound ratio calculations for customer clarification; (4) Dead domain cleanup — audit all three layers (topics, models, views) together, consolidate redundant models. Added platform constraint to Part 4c: Zenlytic does not support filters on count measures that don't reference a specific column. |
 | 2.2 | 2025-02-23 | Rewrote Part 16 "Analytical Capability" section → "Statistical & Analytical Capability" with production evidence from price elasticity testing across all 4 models. Documents execution willingness as the dominant differentiator (Tier 1-2 execute autonomously, Tier 3-4 stop and ask), methodology agreement when models execute (identical log-log regression, same coefficients), baseline price scoping divergence as a data model gap (not model capability), and data modeling implications for statistical tasks (pre-document price proxies, time windows, baseline definitions in `zoe_description`). Added "Statistical task execution" row to Complete Behavioral Comparison table. |
 | 2.1 | 2025-02-23 | Added 2 new Part 15 lessons from production testing: (1) View description alone is insufficient for critical data quality rules — field-level `zoe_description` on the filter dimension is required (proven with 0-for-4 → 4-for-4 archival snapshot fix across all models); (2) Data Model Validation Test Suite — 5-test structured framework covering simple aggregation with critical filters, cross-table comparison, YoY fiscal growth, statistical/analytical Python methodology, and multi-source data reconciliation, with specific failure modes and what to check for each. |
