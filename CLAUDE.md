@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Complete Knowledge Base
 
-**Version:** 2.4 | **Last Updated:** 2025-02-25
+**Version:** 2.5 | **Last Updated:** 2025-02-27
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -615,6 +615,10 @@ Zoë sees all context sources simultaneously and uses them based on relevance to
 > **"Could a talented data analyst answer questions using this data model on their first day?"**
 
 This is the foundational test for every data model. If the naming, descriptions, and structure would confuse a skilled analyst who is new to the domain, Zoë will also struggle. Apply this lens when naming fields, writing descriptions, and organizing topics.
+
+> **"Give Zoë just enough context that chats work — not more."**
+
+Too much guidance, too many descriptions, and over-enriched metadata slow Zoë down. Every `zoe_description`, `description`, synonym, and searchable flag adds to the context Zoë must process on every query. Only add enrichment where Zoë is demonstrably failing or confused. If chats already work without a description, don't add one. Be conservative — start minimal and enrich only in response to observed problems.
 
 ### Best Practices for Zoë
 
@@ -1370,7 +1374,8 @@ When validating data model changes across models, use a structured test suite th
 - **When removing dead domains, deleting topics and/or models without deleting their associated views leaves orphans that Zoë actively routes to.** In a production engagement, all topics and models for two dead domains (Orders, PoC/Demo) were removed, but the views were left in place. Zoë routed the first test question to a dead PoC view (`POC_CWYD.W_FIN_PRFTBLTY_PERFORMANCE_F`) instead of the active fact table — because the view was still visible and looked relevant.
 - **Topics, models, and views form a three-layer stack.** Removing one or two layers without the third creates orphans that confuse Zoë. When cleaning up a workspace, always audit all three layers together.
 - **Audit pattern:** For each view, check that its `model_name` references a model that (a) exists and (b) has a working database connection. For each model, check that it has at least one view with accessible data. Flag any mismatches as orphans.
-- **In dev branches, prefer full removal of dead domains over hiding.** `hidden: true` still leaves artifacts that Zoë evaluates on every query. For dev branches focused on exploratory mode testing, removing all artifacts for domains without data produces a cleaner environment. In production branches, hiding may be appropriate if the domain is expected to come online soon.
+- **Never delete views, topics, or models without explicit customer approval.** Even if a view appears orphaned or redundant, the customer may be using it or planning to. Flag orphans as recommendations and let the customer decide. Hiding (`hidden: true`) is a safer interim step than deletion.
+- **In dev branches, full removal of dead domains is an option — but only after confirming with the customer.** `hidden: true` still leaves artifacts that Zoë evaluates on every query, so removal is cleaner. But the decision to remove must come from the customer, not from the data modeler's judgment alone.
 
 ### Join Guidance in View Descriptions Can Replace Topics in Exploratory Mode
 - **For exploratory mode, explicit join instructions in a fact table's view `description` can substitute for topic `sql_on` definitions.** Write the join as: table name, ON condition with both column names. Example: `JOIN to PNL.DIM_APRC_MAPPING ON FK_HK_APRC_PRODUCT_ID = PK_HK_PRODUCT_CD`. This removes the topic abstraction layer entirely.
@@ -1386,8 +1391,15 @@ When validating data model changes across models, use a structured test suite th
 
 ### Dead Domain Cleanup — Audit All Three Layers Together
 - **Workspaces accumulate dead domains** — schemas with no data, connections with no access, PoC/demo tables left over from onboarding. These create noise that degrades Zoë's routing accuracy and increases query evaluation time.
-- **Cleanup sequence:** (1) Identify which domains have working data (run `SELECT * LIMIT 5` against key tables). (2) For dead domains, flag all three layers — topics, models, AND views — that reference them. (3) In dev branches, remove all artifacts. In production branches, hide them if the domain is expected to come online.
+- **Cleanup sequence:** (1) Identify which domains have working data (run `SELECT * LIMIT 5` against key tables). (2) For dead domains, flag all three layers — topics, models, AND views — that reference them. (3) Present findings to the customer and let them decide whether to remove or hide. Never delete files without explicit approval.
 - **Multiple models pointing to the same connection with no additional configuration** (no relationships, no week_start_day, no timezone) are redundant. If all models use the same connection string and have no model-specific settings, consolidate to the one model that the active views reference.
+
+### Be Conservative — Fix What's Broken, Don't Over-Enrich
+- **When making changes to a customer workspace, stay within the scope of what was asked.** If the review identified specific bugs (broken SQL, wrong value formats, comma-separated synonyms), fix those. Don't escalate to deleting files, restructuring the architecture, or adding descriptions to every field unless explicitly instructed.
+- **Never delete views, topics, or model files without explicit customer approval.** Even if a file appears redundant or orphaned, the customer may have plans for it. Flag it as a recommendation and ask — don't act on your own judgment.
+- **Don't over-enrich the semantic layer.** Too much guidance slows Zoë down. Every `zoe_description`, `description`, synonym, and `searchable` flag adds to the context Zoë processes on every query. Only add enrichment where Zoë is demonstrably failing. If chats already work, leave it alone.
+- **Enrichment should be reactive, not proactive.** The pattern is: (1) observe Zoë failing on a question, (2) diagnose why, (3) add the minimum enrichment needed to fix it. Don't preemptively add `zoe_description` to every field "just in case."
+- **The same conservative principle applies to structural changes.** Removing a topic, consolidating views, or changing join types are architectural decisions that affect the customer's workspace. Recommend them — don't implement them unilaterally.
 
 ---
 
@@ -1810,6 +1822,7 @@ These patterns were observed during structured testing on a production workspace
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.5 | 2025-02-27 | Added "just enough context" guiding principle from CTO guidance: too much enrichment slows Zoë down, only add descriptions/synonyms/searchable where Zoë is demonstrably failing. Added Part 15 lesson "Be Conservative — Fix What's Broken, Don't Over-Enrich": never delete files without explicit customer approval, stay within scope of what was asked, enrichment should be reactive not proactive. Moderated orphan cleanup and dead domain sections to require customer approval before deletion instead of recommending unilateral removal. |
 | 2.4 | 2025-02-25 | Corrected model-level relationships schema in Part 7 to match CTO canonical spec: properties are `from_table`, `join_table`, `join_type`, `relationship`, `sql_on` (no `name` property). Previous versions incorrectly used `from_view`/`to_view`/`type`/`name`. Validated via SBD Production workspace topic-to-relationships migration: migrated 3 topics (commercial_pos, BOM, USMCA) to 4 model-level relationships with view description enrichment. All tests passed on Opus 4.6 — POS fiscal calendar join ($19.8M), cross-table CTE aggregation (84.7% component-to-full cost ratio), HTS code mappings (1.6M). |
 | 2.3 | 2025-02-24 | Added 4 new Part 15 lessons from Eaton workspace migration: (1) Orphaned views cause Zoë misrouting — deleting topics/models without views leaves decoys that Zoë routes to instead of active tables; (2) Join guidance in view descriptions can replace topics in exploratory mode — case-by-case, test before committing; (3) Don't assume measures are needed — Zoë improvises simple aggregations, only flag compound ratio calculations for customer clarification; (4) Dead domain cleanup — audit all three layers (topics, models, views) together, consolidate redundant models. Added platform constraint to Part 4c: Zenlytic does not support filters on count measures that don't reference a specific column. |
 | 2.2 | 2025-02-23 | Rewrote Part 16 "Analytical Capability" section → "Statistical & Analytical Capability" with production evidence from price elasticity testing across all 4 models. Documents execution willingness as the dominant differentiator (Tier 1-2 execute autonomously, Tier 3-4 stop and ask), methodology agreement when models execute (identical log-log regression, same coefficients), baseline price scoping divergence as a data model gap (not model capability), and data modeling implications for statistical tasks (pre-document price proxies, time windows, baseline definitions in `zoe_description`). Added "Statistical task execution" row to Complete Behavioral Comparison table. |
