@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Operational Knowledge Base
 
-**Version:** 3.0 | **Last Updated:** 2026-03-02
+**Version:** 3.1 | **Last Updated:** 2026-03-09
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -984,6 +984,8 @@ SELECT * FROM schema.table_name LIMIT 5
 Scan for these specific issues and document them. Do NOT fix them unilaterally — flag them for discussion.
 
 **Structural Anomalies:**
+- Numeric dimensions on fact tables that should be governed measures — dollar amounts, pre-extended quantities, and unit counts with unambiguous SUM aggregation should be `field_type: measure` with `type: sum` and appropriate `value_format_name`. Unit prices and non-additive fields should remain as dimensions. Compound measures (margins, averages, counts) should be flagged for customer clarification.
+- Views with `default_date` pointing to ETL/system timestamps instead of business dates — fact tables should use the business date (e.g., `dim_date.fiscal_dt` via cross-table reference) rather than `etl_insert_ts`, `cdw_ingest_ts_utc`, or `system_create_date`. Only set `default_date` on views that have measures.
 - Views with no `default_date` that contain time-series measures
 - Views whose `model_name` references a model that doesn't exist or has no working connection
 - Existing topics that should be migrated to model-level `relationships` (flag for migration, not new topic creation)
@@ -1033,7 +1035,8 @@ Based on the anomaly scan, prepare a structured list of questions to ask the cus
 
 After customer clarification, implement the minimum needed for Zoë to work. Apply the "just enough context" principle — don't over-build.
 
-- [ ] Every view with time-series measures has `default_date` set
+- [ ] Obvious numeric fields on fact tables are governed measures (type: sum) with `value_format_name` — not left as dimensions
+- [ ] Every view with measures has `default_date` set to the correct business date (not ETL timestamps)
 - [ ] Every view has at least a basic `description` (even one sentence)
 - [ ] Primary key dimensions are marked with `primary_key: true`
 - [ ] Categorical filter dimensions have `searchable: true`
@@ -1355,11 +1358,11 @@ Run each on at least two models. Compare SQL across models, not just results. Sa
 ### View Descriptions for Unstructured Join Context (Preferred Approach)
 For new workspaces, unstructured join context belongs in view `description` fields (and system prompt for workspace-wide rules) rather than topics. Write join guidance as: table name, ON condition with both column names. Example: `JOIN to DIM_PRODUCT ON FK_PRODUCT_ID = PK_PRODUCT_CD`. For non-obvious join keys where column names don't match, also add the structured join to model-level `relationships` — don't rely solely on description text for these cases. Always test with a question that forces the join to verify Zoë follows the guidance.
 
-### Don't Assume Measures Are Needed
-- Zoë can improvise simple aggregations (SUM, COUNT, AVG) from numeric dimensions
-- The risk area is compound ratio measures (e.g., margin = operating profit / sales) with multiple valid options
-- Don't create measures proactively — flag compound calculations for customer clarification
-- Alternatives: Memories, view `description`, field-level `zoe_description`
+### Flag Obvious Measures — Don't Leave Them as Dimensions
+- Numeric fields on fact tables with unambiguous SUM aggregation (dollar amounts, pre-extended quantities, unit counts) should be governed measures (`field_type: measure`, `type: sum`) with `value_format_name`. This gives Zoë consistent formatting, explicit labels, and a clear signal the field is meant to be aggregated.
+- Unit prices and non-additive fields (e.g., `rtl_prc_amt`, `reg_prc_amt`, `cost_amt`) should remain as dimensions — they are not summable.
+- Compound ratio measures (e.g., margin = operating profit / sales), transaction counts (COUNT of what?), and weighted averages should be flagged for customer clarification — don't create these without confirming the definition.
+- When converting dimensions to measures, also set `default_date` on the view to the correct business date (not ETL timestamps). Use cross-table reference (e.g., `dim_date.fiscal_dt`) if the view lacks its own business date dimension_group. Only set `default_date` on views that have measures.
 
 ### Dead Domain Cleanup
 1. Identify which domains have working data (`SELECT * LIMIT 5`)
@@ -1402,6 +1405,7 @@ For new workspaces, unstructured join context belongs in view `description` fiel
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.1 | 2026-03-09 | Updated measure guidance: obvious numeric fields on fact tables (dollar amounts, unit counts) should be flagged and converted to governed measures — not left as dimensions. Added default_date validation to Phase 2 anomaly scan (ETL timestamps → business dates). Updated Phase 4 checklist. Renamed "Don't Assume Measures Are Needed" to "Flag Obvious Measures — Don't Leave Them as Dimensions." |
 | 3.0 | 2026-03-02 | Major restructure: Moved Critical Constraints to top of document for immediate visibility. Added Critical Constraint #3: Topics are being deprecated — avoid creating new ones; use model-level `relationships` for structured joins, system prompt/view description/field `zoe_description` for unstructured context (per CTO guidance). Added Critical Constraint #4: Always run before/after tests on major changes — capture baseline SQL before changes, compare after. Added Part 15 (Greenfield Exploratory Workspace Setup) with phased approach: import/analyze views, flag anomalies, prepare customer clarification questions, minimum viable checklist, validation testing. Extracted Part 16 (LLM Model Considerations) into separate `LLM_Model_Testing_Reference.md` for internal use — reduces CLAUDE.md context footprint. Updated Part 6 (Topics) with deprecation notice. Updated Part 7 join architecture to reflect two-location model: structured → model `relationships`, unstructured → descriptions/system prompt. Reframed topic-related lessons in Part 17 as migration guidance. Removed stale Sonnet 4.6 "early release" hedging. Renumbered parts. |
 | 2.5 | 2025-02-27 | Added "just enough context" guiding principle from CTO guidance. Added Part 15 lesson "Be Conservative — Fix What's Broken, Don't Over-Enrich." Moderated orphan cleanup to require customer approval. |
 | 2.4 | 2025-02-25 | Corrected model-level relationships schema to match CTO canonical spec. Validated via SBD Production workspace migration. |
