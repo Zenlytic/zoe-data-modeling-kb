@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Operational Knowledge Base
 
-**Version:** 3.1 | **Last Updated:** 2026-03-09
+**Version:** 3.5 | **Last Updated:** 2026-03-30
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -219,7 +219,7 @@ Dimensions represent columns for grouping and filtering.
     - alternative_name
     - another_term
   primary_key: true                       # Marks as unique identifier
-  value_format_name: "#,##0"              # Display formatting
+  value_format_name: decimal_0             # Display formatting (named format)
 
   # Optional advanced properties
   tags: ['customer', 'orders']            # Special identifiers for Zenlytic
@@ -241,6 +241,22 @@ Dimensions represent columns for grouping and filtering.
 | `number` | Numeric values |
 | `yesno` | Boolean/Yes-No |
 | `tier` | Categorized value ranges |
+
+### Valid value_format_name Values
+Zenlytic uses **named format identifiers** — NOT format strings like `$#,##0.00` or `#,##0`. The following named formats are valid:
+
+| Format Name | Description |
+|-------------|-------------|
+| `decimal`, `decimal_0` - `decimal_4` | Decimal numbers (0-4 decimal places) |
+| `decimal_pct_0` - `decimal_pct_4` | Decimal percentages (0-4 decimal places) |
+| `percent_0` - `percent_4` | Percentages (0-4 decimal places) |
+| `usd`, `usd_0` - `usd_2` | US Dollar formatting (0-2 decimal places) |
+| `eur`, `eur_0` - `eur_2` | Euro formatting (0-2 decimal places) |
+| `string` | Text format |
+| `image_from_url` | Image rendering |
+| `date`, `week`, `month`, `quarter`, `year` | Date/time formats |
+
+**Common mappings:** Dollar amounts → `usd_2`, unit counts → `decimal_0`, percentages → `percent_1`
 
 ---
 
@@ -312,7 +328,7 @@ Measures represent aggregations/calculations.
   zoe_description: "Total sales revenue including all channels"
   group_label: "Revenue Metrics"
   hidden: false
-  value_format_name: "$#,##0.00"
+  value_format_name: usd_2
 
   synonyms: [total_sales, income, sales_total]
 
@@ -889,6 +905,7 @@ default_date: created_at                  # References a dimension_group name
 - Both reference the `name` of a `dimension_group` field (type: time)
 - `canon_date` takes precedence over `default_date`
 - Always set `default_date` on views with time-series measures
+- **Cross-table `default_date` requires primary/foreign key identifiers** — when `default_date` references a field in a different table (e.g., `dim_date.fiscal_dt`), you must define a `primary` identifier on the target view and matching `foreign` identifiers on each view that uses the cross-table reference. Without these, the Data Model Editor will error with "not joinable to the view."
 
 ---
 
@@ -1159,9 +1176,15 @@ These are real-world patterns discovered during customer workspace work. Apply t
 - **When a join returns no results, check the join keys first.** The most common cause is mismatched key formats.
 
 ### Redundant Identifiers as Latent Risks
-- An identifier that points to a real column is still a latent risk if a topic `sql_on` already handles the same join more precisely.
-- **Rule: If a topic defines an explicit `sql_on` for a join, remove any overlapping foreign identifiers on the same view.**
-- Only keep identifiers that serve a purpose NOT covered by a topic.
+- An identifier that points to a real column is still a latent risk if a topic `sql_on` or model-level `relationship` already handles the same join more precisely.
+- **Rule: If a topic or model-level relationship defines an explicit `sql_on` for a join, remove any overlapping foreign identifiers on the same view — unless the identifiers serve another purpose (e.g., enabling cross-table `default_date` validation).**
+- Only keep identifiers that serve a purpose NOT covered by a topic or relationship.
+
+### Duplicate Join Paths Break Verification
+- **Never define the same join via both identifiers AND model-level relationships.** Having both creates duplicate join path signals that can break dimension and measure verification in Zoë queries.
+- When a join needs identifiers for `default_date` cross-table validation, **remove the corresponding model-level relationship** — the identifiers handle the join, and the relationship is redundant.
+- When a join uses compound keys (e.g., `store_hash_key AND dt_skey`), identifiers can't express this — **use model-level relationships only** for compound key joins.
+- **Pattern:** Simple single-key joins (like `dt_skey`) → identifiers. Compound multi-key joins → model-level relationships. Never both for the same join.
 
 ### Don't Band-Aid SQL Dialect Issues in the Data Model
 - Zoë knows the database warehouse through the `connection` property. SQL syntax errors are Zoë's SQL generation responsibility, not a data model problem.
@@ -1170,11 +1193,12 @@ These are real-world patterns discovered during customer workspace work. Apply t
 
 ### Identifier Cleanup Workflow
 1. Catalog all identifiers across view files
-2. Cross-reference against topics — flag identifiers whose join is covered by `sql_on`
-3. Generate test questions that exercise each join path
-4. Run tests and inspect which join path Zoë chose
-5. Remove redundant identifiers
-6. Re-test after removal
+2. Cross-reference against topics AND model-level relationships — flag identifiers whose join is covered by `sql_on`
+3. Check if any flagged identifiers are needed for cross-table `default_date` validation — if so, remove the relationship instead
+4. Generate test questions that exercise each join path
+5. Run tests and inspect which join path Zoë chose
+6. Remove redundant identifiers (or redundant relationships, per step 3)
+7. Re-test after removal — compare SQL, not just results
 
 ### Multi-Column Joins in Topics
 ```yaml
@@ -1265,6 +1289,7 @@ Effective sections (proven patterns):
 - **Row Limits:** Performance guardrails for detail queries
 - **Time Period Rules:** How to interpret relative date phrases
 - **User Attribute Handling:** Instructions to use automatically-provided attributes
+- ~~**Measure Formatting Guard:**~~ No longer needed — Zoë's verification engine now strips ROUND, COALESCE, CAST(varchar), TO_CHAR, and STRING before comparison (as of 2026-03-30, per CTO)
 
 Don't put field-level guidance in the system prompt — use `zoe_description` instead.
 
@@ -1297,6 +1322,11 @@ When removing a topic (migrating to relationships), audit its `zoe_description` 
 
 ### SQL Comparison Is Essential for Validation
 Always compare generated SQL — not just results. Two queries can return superficially similar results while one is fundamentally wrong. Check: WHERE clause, JOIN clause, GROUP BY, table references.
+
+### Measure Verification — SQL Wrapper Functions (Resolved at Platform Level)
+Zoë's verification engine now strips non-value-altering wrappers — `ROUND`, `COALESCE`, `CAST(varchar)`, `TO_CHAR`, and `STRING` — before comparing generated SQL against governed measure definitions (as of 2026-03-30, per CTO). A system prompt "Measure Formatting Guard" is **no longer needed** for these functions.
+
+**Still breaks verification:** String modifications that change the value or affect GROUP BY results — e.g., `UPPER()`, `CAST(number)`, `CAST(date)` — are intentionally NOT stripped because they carry correctness risk. If Zoë wraps measures in these, diagnose why rather than adding a blanket system prompt instruction.
 
 ### Measure Discoverability — Keyword Conflicts
 Every measure that could be requested by name MUST have its own `zoe_description` with explicit keyword routing. For related measures (dollar vs percentage, gross vs net), clearly distinguish when to use each.
@@ -1405,6 +1435,10 @@ For new workspaces, unstructured join context belongs in view `description` fiel
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.5 | 2026-03-30 | Measure Formatting Guard no longer needed: Zoë's verification engine now strips ROUND, COALESCE, CAST(varchar), TO_CHAR, STRING before comparison (per CTO, 2026-03-30). Value-altering wrappers (UPPER, CAST(number/date)) are intentionally NOT stripped. Removed system prompt recommendation for Measure Formatting Guard. |
+| 3.4 | 2026-03-09 | Added "Duplicate Join Paths Break Verification" lesson: never define the same join via both identifiers AND model-level relationships — duplicate signals break dimension/measure verification. Simple single-key joins → identifiers; compound multi-key joins → relationships; never both. Updated "Redundant Identifiers as Latent Risks" to include model-level relationships (not just topics). Updated Identifier Cleanup Workflow to check for `default_date` dependency before removing identifiers vs relationships. |
+| 3.3 | 2026-03-09 | Added measure verification lesson: SQL wrapper functions (ROUND, COALESCE, CAST, etc.) break governed measure verification in Exploratory mode. Fix via system prompt, not per-measure `zoe_description`. Added "Measure Formatting Guard" to system prompt effective patterns. Clarified `default_date` joinability: cross-table references require primary/foreign key identifiers on the views. |
+| 3.2 | 2026-03-09 | Fixed `value_format_name` examples throughout — Zenlytic uses named formats (`usd_2`, `decimal_0`, etc.), NOT format strings (`$#,##0.00`). Added valid `value_format_name` reference table to Part 4a. Added note that cross-table `default_date` references require an explicit join path in model relationships. |
 | 3.1 | 2026-03-09 | Updated measure guidance: obvious numeric fields on fact tables (dollar amounts, unit counts) should be flagged and converted to governed measures — not left as dimensions. Added default_date validation to Phase 2 anomaly scan (ETL timestamps → business dates). Updated Phase 4 checklist. Renamed "Don't Assume Measures Are Needed" to "Flag Obvious Measures — Don't Leave Them as Dimensions." |
 | 3.0 | 2026-03-02 | Major restructure: Moved Critical Constraints to top of document for immediate visibility. Added Critical Constraint #3: Topics are being deprecated — avoid creating new ones; use model-level `relationships` for structured joins, system prompt/view description/field `zoe_description` for unstructured context (per CTO guidance). Added Critical Constraint #4: Always run before/after tests on major changes — capture baseline SQL before changes, compare after. Added Part 15 (Greenfield Exploratory Workspace Setup) with phased approach: import/analyze views, flag anomalies, prepare customer clarification questions, minimum viable checklist, validation testing. Extracted Part 16 (LLM Model Considerations) into separate `LLM_Model_Testing_Reference.md` for internal use — reduces CLAUDE.md context footprint. Updated Part 6 (Topics) with deprecation notice. Updated Part 7 join architecture to reflect two-location model: structured → model `relationships`, unstructured → descriptions/system prompt. Reframed topic-related lessons in Part 17 as migration guidance. Removed stale Sonnet 4.6 "early release" hedging. Renumbered parts. |
 | 2.5 | 2025-02-27 | Added "just enough context" guiding principle from CTO guidance. Added Part 15 lesson "Be Conservative — Fix What's Broken, Don't Over-Enrich." Moderated orphan cleanup to require customer approval. |
