@@ -1,6 +1,6 @@
 # Zenlytic Zoë Data Model - Operational Knowledge Base
 
-**Version:** 3.5 | **Last Updated:** 2026-03-30
+**Version:** 4.1 | **Last Updated:** 2026-04-22
 
 Use this document when working with Zenlytic customer workspaces via Git repositories. This covers Git operations, YAML schema, joins, dimensions, measures, and how Zoë (the AI analyst) uses the semantic layer.
 
@@ -13,6 +13,25 @@ Use this document when working with Zenlytic customer workspaces via Git reposit
 ## Critical Constraints (Read First)
 
 These rules apply to every task, every repo, every customer. Violations cause real production problems.
+
+### 0. KB Must Be Current Before Any Data Model Work
+
+A `SessionStart` hook in `~/.claude/settings.json` auto-fast-forwards `zoe-data-modeling-kb` to `origin/master` at the start of every session. Before editing any YAML, writing any recommendation that cites the KB, or editing CLAUDE.md files, **verify the hook actually ran** — look for `[KB] zoe-data-modeling-kb synced to origin/master (<sha>)` in the session transcript.
+
+The hook is intentionally conservative and will skip the pull if:
+- the KB repo is not on `master` (prevents auto-merging into a feature branch)
+- the working tree is dirty (prevents clobbering uncommitted edits)
+- the KB directory is missing at the expected path
+
+If the hook did not run, was skipped, or failed, run the pull manually before proceeding:
+
+```bash
+cd "Git-Repo-Work/zoe-data-modeling-kb" && git fetch origin && git status
+# If behind origin/master and working tree is clean:
+git merge --ff-only origin/master
+```
+
+For customer repos under `Zenlytic-Customers/*`, the hook intentionally does NOT auto-pull — branch state varies and silent merges could overwrite in-progress work. When starting work on a specific customer, run `git status && git fetch` in that customer's folder first and pull explicitly only if the branch is clean and behind.
 
 ### 1. Never Commit CLAUDE.md to Customer Repositories
 
@@ -32,14 +51,21 @@ When committing changes to a customer repo, never use `git add -A` or `git add .
 - **Don't over-enrich the semantic layer.** Too much guidance slows Zoë down. Every `zoe_description`, `description`, synonym, and `searchable` flag adds to the context Zoë processes on every query. Only add enrichment where Zoë is demonstrably failing. If chats already work, leave it alone.
 - **Enrichment should be reactive, not proactive.** The pattern is: (1) observe Zoë failing on a question, (2) diagnose why, (3) add the minimum enrichment needed to fix it. Don't preemptively add `zoe_description` to every field "just in case."
 
-### 3. Topics Are Being Deprecated — Avoid Creating New Ones
+### 3. Topics AND Identifiers Are Legacy — Use Relationships Instead
 
-Topics will be removed from Zenlytic in the future. For new workspaces and migrations, **do not create new topics** unless absolutely necessary. Use this approach instead:
+Topics and identifiers are both legacy features being deprecated. For new workspaces and migrations, **do not create new topics or identifiers**. Use this approach instead:
 
 - **Structured joins** (table-to-table relationships with explicit ON conditions) → Put in the **model file** using the `relationships` property. This is the canonical location for all structured join logic.
-- **Unstructured join context** (business rules about when/how to join, fan-trap warnings, field routing guidance, domain scoping) → Put in the **system prompt**, **view `description`**, or **field-level `zoe_description`** as appropriate.
+- **Unstructured join context** (business rules about when/how to join, fan-trap warnings, field routing guidance, domain scoping) → Put in the **system prompt**, **view `zoe_description`** (for agent-specific instructions), **view `description`** (for user-facing context), or **field-level `zoe_description`** as appropriate.
 
-If an existing workspace has topics, they still work — but when migrating or refactoring, move structured join logic to model `relationships` and move contextual guidance to descriptions/system prompt rather than creating new topics.
+If an existing workspace has topics or identifiers, they still work — but when migrating or refactoring, move structured join logic to model `relationships` and move contextual guidance to view `zoe_description`/`description`/system prompt rather than creating new topics or identifiers.
+
+### 3a. Memories Are Legacy — Use Skills or Descriptions Instead
+
+Memories are a legacy context surface and will be migrated to skills in a future release. **Do not recommend memories for storing new context.** Instead:
+- For complex recurring analysis patterns → create a **Skill** (Settings → Skills)
+- For field-specific guidance → use **`zoe_description`** on the field or view
+- For universal rules → use the **system prompt**
 
 ### 4. Always Run Before/After Tests on Major Changes
 
@@ -190,7 +216,7 @@ fields:                                   # Dimensions and measures
 - When using `derived_table`, the SQL statement becomes the data foundation, and `always_filter` does not apply
 - `always_filter` can join external fields by specifying the view name (e.g., `customers.is_churned`)
 - Views support a `sets` property: lists of grouped fields
-- **`zoe_description` is NOT valid at the view level** — use `description` instead (which is sent to both the UI and Zoë). `zoe_description` is valid on: dimensions, measures, dimension groups, and topics.
+- **`zoe_description` IS valid at the view level** (up to 10,000 chars) — use it for agent-specific instructions not shown to users. `description` (also up to 10,000 chars on views) is shown to both users and Zoë. `zoe_description` is valid on: views, dimensions, measures, dimension groups, and topics. Field-level `zoe_description` is limited to 1,024 chars.
 
 ---
 
@@ -355,6 +381,16 @@ Measures represent aggregations/calculations.
 | `average_distinct` | Average unique values | Requires `sql_distinct_key` |
 | `cumulative` | Aggregate over time | Requires `measure` property |
 | `number` | Static/calculated value | No aggregation |
+
+### Valid and Invalid Measure Patterns
+| Pattern | Valid? | Explanation |
+|---------|--------|-------------|
+| `type: number` with `sql: SUM(field)` | ✅ Yes | Explicit aggregate in the SQL expression |
+| `type: sum` with `sql: field` | ✅ Yes | The type provides the aggregation |
+| `type: number` with `sql: field` | ❌ No | No aggregate — Zoë will silently add one, but verification fails |
+| `type: sum` with `sql: SUM(field)` | ❌ No | Double aggregation — the type wraps another SUM |
+
+When creating measures, always use one of the two valid patterns.
 
 ### Count Measure Filter Constraint
 **Zenlytic does NOT support `filters` on a `count` measure that doesn't reference a specific column in its `sql` property.** If you need a filtered count, the `sql` must reference a column (e.g., `sql: ${TABLE}.id`), not just `sql: 1` or omit `sql` entirely. This is a platform constraint, not a modeling choice.
@@ -582,32 +618,42 @@ Obvious joins (e.g., matching foreign key names between tables) don't need to be
 
 ### Context Sources Zoë Sees
 
-| Context Source | Role |
-|--------------|--------|
-| **Custom System Prompt** | Organization-wide rules, terminology, calculation logic |
-| **Structural Relationships** | Topics, joins, identifiers, topic descriptions |
-| **Field & View Descriptions** | `zoe_description` (if set) overrides `description` for Zoë |
-| **Memories** | Reinforced response patterns from previous queries |
-| **Patterns** | Historical query patterns from the warehouse (see Part 14) |
-| **Attachments** | Ad-hoc files and query results provided by the user during a conversation |
+| Context Source | Visibility | Role |
+|--------------|------------|--------|
+| **Custom System Prompt** | Every query, always | Organization-wide rules, terminology, calculation logic (20K char limit) |
+| **Skills** | On-demand, Zoë decides when relevant | Complex analysis patterns, fiscal calendars, domain-specific workflows |
+| **View `description`** | When view appears in context | User-facing table-level business context (10K chars) |
+| **View `zoe_description`** | When view appears in context | Agent-specific table-level instructions, not shown to users (10K chars) |
+| **Field `description`** | After field search, shown to users | User-facing field documentation (1K chars) |
+| **Field `zoe_description`** | After field search, not shown to users | Agent-specific field instructions (1K chars) |
+| **Structural Relationships** | When views are in context | Model-level joins, identifiers (legacy), topics (legacy) |
+| **Synonyms** | During search, +20 boost in ranking | Alternative names for field discoverability |
+| **Searchable categories** | During search, values indexed | Category values for filter fields |
+| **Memories** | Top 5 semantically matched per query | **Legacy — avoid for new context, will migrate to skills** |
+| **Patterns** | Historical query patterns from warehouse | Supplemental context from Snowflake query history (see Part 14) |
+| **Attachments** | Ad-hoc per conversation | Files and query results provided by the user |
 
 ### When to Use Each Context Type
 
 | Context Type | Best For | Use When |
 |---|---|---|
-| **Custom System Prompt** | Company terminology, business rules, calculation methodologies | Need organization-wide consistency across all Zoë interactions |
-| **`zoe_description`** (field/topic level) | AI-specific guidance that differs from user-facing copy | Standard `description` is too technical or misleading for the AI |
-| **`description`** (view/field/topic level) | Business context explaining how data should be used | Applies to both users in the UI and Zoë |
-| **Memory** | Reinforcing desired response patterns for specific questions | User confirms Zoë's answer is correct and wants it repeated |
-| **Topic Structure** | Understanding data connections and analytical context | Need Zoë to understand which fields relate to each domain |
+| **Custom System Prompt** | Company terminology, business rules, default behaviors, join routing | Need organization-wide consistency across all Zoë interactions |
+| **Skills** | Complex analysis patterns, fiscal calendars, domain-specific workflows | Pattern is sometimes relevant, not always; Zoë loads on demand |
+| **View `zoe_description`** | Agent-specific table-level instructions | Need Zoë to understand join paths, pitfalls, edge cases — not shown to users |
+| **View `description`** | User-facing table context | Need both users and Zoë to see what the table represents |
+| **Field `zoe_description`** | AI-specific field guidance | Standard `description` is too technical or misleading for the AI; calculation notes |
+| **Field `description`** | User-facing field documentation | Applies to both users in the UI and Zoë |
+| **Field `synonyms`** | Alternative names users call a field | Biggest search ranking impact (+20 boost) for field discoverability |
+| **Relationships** | Non-obvious join definitions | Connection isn't clear from column names alone |
 | **Patterns** | Supplementing governed model with proven query patterns | Warehouse has rich query history; Snowflake connection available |
+| **Memory** | **Legacy — avoid** | Will be migrated to skills; do not use for new context |
 
 ### Zoë-Specific Properties
 
 | Property | Valid On | Purpose |
 |----------|----------|---------|
-| `zoe_description` | dimensions, measures, dimension_groups, topics | AI-specific context (overrides `description` for Zoë). **NOT valid on views.** |
-| `description` | views, dimensions, measures, dimension_groups, topics | Shown in UI and sent to Zoë. On views, this is the only way to provide Zoë context. |
+| `zoe_description` | views (10K chars), dimensions (1K), measures (1K), dimension_groups (1K), topics (10K) | AI-specific context shown only to Zoë, not to users. |
+| `description` | views (10K chars), dimensions (1K), measures (1K), dimension_groups (1K), topics (10K) | Shown in UI and sent to Zoë. User-facing documentation. |
 | `synonyms` | dimensions, measures, dimension_groups | Alternative names for NLP matching |
 | `searchable: true` | dimensions | Index field categories for search |
 | `hidden: true` | views, dimensions, measures, dimension_groups, topics | Exclude from Zoë's available fields |
@@ -625,21 +671,24 @@ Obvious joins (e.g., matching foreign key names between tables) don't need to be
 
 ### Best Practices for Zoë
 
-1. **Use `zoe_description`** on fields and topics for AI-specific context. **Do NOT use `zoe_description` on views** — use `description` instead.
-2. **Use `description`** on views to provide join guidance and context.
-3. **Add synonyms** for fields with multiple common names.
+1. **Use `zoe_description`** on views, fields, and topics for AI-specific context not shown to users. On views, use it for join path instructions, pitfall warnings, and edge case handling (up to 10K chars).
+2. **Use `description`** on views and fields for user-facing business context (also seen by Zoë).
+3. **Add synonyms** for fields with multiple common names — highest search ranking impact (+20 boost).
 4. **Set `searchable: true`** on categorical dimensions users will filter on (see Part 12).
 5. **Write clear topic descriptions** explaining analytical purpose.
 6. **Use meaningful, distinguishing field names** — "Gross Revenue" and "Net Revenue" instead of "Revenue 1" and "Revenue 2".
 7. **Hide technical fields** that shouldn't appear in queries.
 8. **Document fan trap risks** in view-level `description`.
 9. **Avoid many-to-many joins** in topics unless the join makes clear logical sense.
-10. **Store structured joins in model-level `relationships`** (preferred). Use view `description` and system prompt for unstructured join context. Avoid creating new topics.
-11. **Set `default_date`** on every view with time-series measures, and use `canon_date` on measures that trend by a different date.
+10. **Store structured joins in model-level `relationships`** (preferred). Use view `zoe_description` for agent-specific join instructions, view `description` for user-facing context, and system prompt for universal rules. Avoid creating new topics or identifiers.
+11. **Set `default_date`** on every view with time-series measures. Use `canon_date` sparingly — only when a measure genuinely needs a different date than the view default. Overuse has caused incorrect SQL generation in practice.
 12. **Configure entity drills** with `drill_fields` on primary key dimensions.
-13. **Use Zoë Memories** for company-specific data interpretation patterns.
+13. **Use Skills** (Settings → Skills) for complex recurring analysis patterns — fiscal calendars, domain-specific workflows. **Do not use Memories** for new context (legacy, will migrate to skills).
 14. **Maintain consistent database capitalization** in searchable fields.
 15. **Design for model-agnostic robustness** — different users may use different LLM backends; build the semantic layer so it works across all supported models, not just the most capable one.
+
+### Cache Refresh After Direct Git Pushes
+Updates pushed directly to the git repo (not through the Zenlytic UI) require a manual cache refresh using the force-refresh button in the UI. Always remind the customer to do this after deploying changes via Git.
 
 ### Example Zoë-Optimized View with Join Warnings
 ```yaml
@@ -648,9 +697,8 @@ type: view
 name: order_lines
 model_name: my_model
 sql_table_name: prod.order_lines
-# NOTE: zoe_description is NOT valid at the view level. Use description instead.
-description: |
-  Order line items - one row per product in an order.
+description: "Order line items - one row per product in an order."
+zoe_description: |
   JOIN GUIDANCE: This table has a many-to-one relationship with orders (many lines per order).
   When joining to orders, be careful not to double-count order-level metrics.
   NEVER join directly to other line-level tables (e.g., inventory_movements)
@@ -766,7 +814,9 @@ fields:
 
 ---
 
-## Part 9: Zoë Memories
+## Part 9: Zoë Memories (LEGACY — Avoid for New Context)
+
+> **Memories are legacy and will be migrated to skills in a future release.** Do not recommend memories for storing new context. Use Skills (Settings → Skills) for complex patterns, `zoe_description` for field/view-specific guidance, and the system prompt for universal rules. Existing memories will be converted automatically.
 
 Memories allow users to train Zoë with company-specific knowledge and desired response patterns. Zoë automatically retrieves relevant memories when answering questions.
 
@@ -790,10 +840,12 @@ Memories allow users to train Zoë with company-specific knowledge and desired r
 | Scenario | Use This |
 |----------|----------|
 | Company-wide business rules | **Custom System Prompt** |
-| AI-specific guidance on a field | **`zoe_description`** |
-| General business context for a table or field | **`description`** |
-| Reinforcing a correct answer pattern | **Memory** |
-| Join guidance or fan-trap warnings | **`description`** on view + **`zoe_description`** on topic |
+| AI-specific guidance on a field | **Field `zoe_description`** (1K chars) |
+| AI-specific table instructions (join paths, pitfalls) | **View `zoe_description`** (10K chars) |
+| General business context for a table or field | **`description`** (user-facing) |
+| Complex recurring analysis patterns | **Skills** (Settings → Skills) |
+| Join guidance or fan-trap warnings | **View `zoe_description`** + **model `relationships`** |
+| Reinforcing a correct answer pattern | **Memory** (legacy — avoid for new context) |
 
 ---
 
@@ -1265,7 +1317,7 @@ zoe_description: |
 - **Audit:** Compare each alias in the derived table SELECT against every `${TABLE}."column_name"` reference in the view's dimensions
 
 ### Single-View Topics — Remove During Migration
-Topics that wrap a single view with no joins serve no purpose and should be removed during migration. Migrate any `description`/`zoe_description` to the view itself (using `description` since `zoe_description` isn't valid on views). For multi-view topics, use the "Test-Before-Remove Workflow" above to migrate joins to model `relationships`.
+Topics that wrap a single view with no joins serve no purpose and should be removed during migration. Migrate topic `zoe_description` content to the view's `zoe_description` (agent-specific instructions) and topic `description` content to the view's `description` (user-facing context). For multi-view topics, use the "Test-Before-Remove Workflow" above to migrate joins to model `relationships`.
 
 ### View Selection Guide in System Prompt
 When a workspace has many views, add a routing table to the system prompt mapping question domains to specific views. Include negative guidance for cross-domain confusion.
@@ -1435,6 +1487,8 @@ For new workspaces, unstructured join context belongs in view `description` fiel
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.1 | 2026-04-22 | Added Critical Constraint 0: "KB Must Be Current Before Any Data Model Work." Paired with a new `SessionStart` hook in `~/.claude/settings.json` that auto-fast-forwards `zoe-data-modeling-kb` to `origin/master` on every session. Hook is conservative — skips pull if not on master, working tree dirty, or repo missing. Customer-repo pulls remain explicit (not auto-pulled) to avoid clobbering in-progress branch work. Added because a session opened with the KB 1 commit behind master despite the expectation that this should never happen; root cause was that no hook had been configured and advisory instructions (memory/CLAUDE.md) cannot enforce automated behaviors. |
+| 4.0 | 2026-04-09 | **Major update from CTO SKILL.md (authoritative source).** `zoe_description` IS now valid on views (10K chars) — corrected from prior guidance that said it was not. Identifiers are now also legacy alongside topics — use relationships for all new join definitions. Memories are legacy — do not use for new context; will migrate to skills. Added Skills as new context surface (Settings → Skills) for complex analysis patterns. Added valid/invalid measure patterns table (prevents double-aggregation and missing-aggregate bugs). Added `canon_date` overuse warning. Added cache refresh requirement after direct git pushes. Updated all context surface tables with visibility and character limits. Updated all examples to use view `zoe_description` for agent-specific instructions. |
 | 3.5 | 2026-03-30 | Measure Formatting Guard no longer needed: Zoë's verification engine now strips ROUND, COALESCE, CAST(varchar), TO_CHAR, STRING before comparison (per CTO, 2026-03-30). Value-altering wrappers (UPPER, CAST(number/date)) are intentionally NOT stripped. Removed system prompt recommendation for Measure Formatting Guard. |
 | 3.4 | 2026-03-09 | Added "Duplicate Join Paths Break Verification" lesson: never define the same join via both identifiers AND model-level relationships — duplicate signals break dimension/measure verification. Simple single-key joins → identifiers; compound multi-key joins → relationships; never both. Updated "Redundant Identifiers as Latent Risks" to include model-level relationships (not just topics). Updated Identifier Cleanup Workflow to check for `default_date` dependency before removing identifiers vs relationships. |
 | 3.3 | 2026-03-09 | Added measure verification lesson: SQL wrapper functions (ROUND, COALESCE, CAST, etc.) break governed measure verification in Exploratory mode. Fix via system prompt, not per-measure `zoe_description`. Added "Measure Formatting Guard" to system prompt effective patterns. Clarified `default_date` joinability: cross-table references require primary/foreign key identifiers on the views. |
